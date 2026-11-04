@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Adquisición de estado de Minecraft",
+  "TXT_CODE_d3de39b4": "actualización completada",
+  "TXT_CODE_abfe9512": "ahorrar",
+  "TXT_CODE_57d1929e": "ElementsPanel utilizará el protocolo Minecraft Ping para intentar obtener la cantidad de personas en línea en el servidor, la versión, la latencia y otra información.",
+  "TXT_CODE_6b175558": "Después de completar la configuración, cuando la instancia se está ejecutando, el estado del servidor se actualiza cada minuto.",
+  "TXT_CODE_f49149d0": "puerto de conexión",
+  "TXT_CODE_2ab036a4": "Por favor ingresa el puerto del servidor del juego",
+  "TXT_CODE_e2dc0156": "Por ejemplo: 25565",
+  "TXT_CODE_2f59807a": "Dirección del servidor",
+  "TXT_CODE_8e2be926": "Ingrese la dirección IP del servidor del juego. Si se deja en blanco, el valor predeterminado será el host local del demonio (localhost).",
+  "TXT_CODE_ddc2de99": "Predeterminado: servidor local"
+}

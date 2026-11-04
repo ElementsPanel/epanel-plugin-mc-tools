@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Minecraft 서버 주소 설정",
+  "TXT_CODE_d3de39b4": "업데이트 완료",
+  "TXT_CODE_abfe9512": "저장",
+  "TXT_CODE_57d1929e": "ElementsPanel는 Minecraft Ping 프로토콜을 사용하여 서버의 온라인 사용자 수, 버전, 대기 시간 및 기타 정보를 얻으려고 합니다.",
+  "TXT_CODE_6b175558": "구성을 완료한 후 인스턴스가 실행되면 서버 상태가 1분마다 새로 고쳐집니다.",
+  "TXT_CODE_f49149d0": "연결 포트",
+  "TXT_CODE_2ab036a4": "게임 서버 포트를 입력하세요",
+  "TXT_CODE_e2dc0156": "예: 25565",
+  "TXT_CODE_2f59807a": "서버 주소",
+  "TXT_CODE_8e2be926": "게임 서버 IP 주소를 입력하세요. 공백으로 두면 기본적으로 데몬 로컬 호스트(localhost)가 사용됩니다.",
+  "TXT_CODE_ddc2de99": "기본값: 로컬호스트"
+}

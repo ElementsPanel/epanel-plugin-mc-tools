@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Minecraft-Spielerabfrage",
+  "TXT_CODE_d3de39b4": "Update abgeschlossen",
+  "TXT_CODE_abfe9512": "Speichern",
+  "TXT_CODE_57d1929e": "ElementsPanel verwendet das Minecraft-Ping-Protokoll, um die Anzahl der Personen, die auf dem Server online sind, die Version, die Latenz und andere Informationen zu ermitteln.",
+  "TXT_CODE_6b175558": "Nach Abschluss der Konfiguration wird der Serverstatus jede Minute aktualisiert, wenn die Instanz ausgeführt wird.",
+  "TXT_CODE_f49149d0": "Anschlussport",
+  "TXT_CODE_2ab036a4": "Bitte geben Sie den Gameserver-Port ein",
+  "TXT_CODE_e2dc0156": "Beispiel: 25565",
+  "TXT_CODE_2f59807a": "Serveradresse",
+  "TXT_CODE_8e2be926": "Bitte geben Sie die IP-Adresse des Spielservers ein. Wenn Sie das Feld leer lassen, wird standardmäßig der lokale Daemon-Host (localhost) verwendet.",
+  "TXT_CODE_ddc2de99": "Standard: localhost"
+}

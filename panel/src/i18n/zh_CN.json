@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Minecraft 状态获取",
+  "TXT_CODE_d3de39b4": "更新成功",
+  "TXT_CODE_abfe9512": "保存",
+  "TXT_CODE_57d1929e": "ElementsPanel 将使用 Minecraft Ping 协议尝试获取服务器在线人数，版本，延迟等信息。",
+  "TXT_CODE_6b175558": "完成配置后，实例运行时，每分钟刷新一次服务器状态。",
+  "TXT_CODE_f49149d0": "端口",
+  "TXT_CODE_2ab036a4": "请输入游戏服务器端口",
+  "TXT_CODE_e2dc0156": "列如：25565",
+  "TXT_CODE_2f59807a": "服务器地址",
+  "TXT_CODE_8e2be926": "请输入游戏服务器IP地址，不填写则默认为守护进程本地主机（localhost）",
+  "TXT_CODE_ddc2de99": "默认值：localhost"
+}

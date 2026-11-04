@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Minecraft Players Query",
+  "TXT_CODE_d3de39b4": "Update Successful",
+  "TXT_CODE_abfe9512": "Save",
+  "TXT_CODE_57d1929e": "ElementsPanel will use the \"Minecraft Ping protocol\" to try to obtain the number of online servers, versions, delays and other information.",
+  "TXT_CODE_6b175558": "After completing the configuration, the server status will be refreshed every minute when the instance is running.",
+  "TXT_CODE_f49149d0": "Port",
+  "TXT_CODE_2ab036a4": "Please enter the game server port",
+  "TXT_CODE_e2dc0156": "Example: 25565",
+  "TXT_CODE_2f59807a": "Server address",
+  "TXT_CODE_8e2be926": "Please enter the IP address of the game server, leave blank for the local host (localhost) by default.",
+  "TXT_CODE_ddc2de99": "Default: localhost"
+}

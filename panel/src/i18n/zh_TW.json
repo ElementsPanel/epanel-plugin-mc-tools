@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Minecraft 狀態獲取",
+  "TXT_CODE_d3de39b4": "更新成功",
+  "TXT_CODE_abfe9512": "儲存",
+  "TXT_CODE_57d1929e": "ElementsPanel 將使用 Minecraft Ping 協議嘗試取得伺服器線上人數、版本、延遲等資訊。",
+  "TXT_CODE_6b175558": "完成設定後，實例執行時，每分鐘刷新一次伺服器狀態。",
+  "TXT_CODE_f49149d0": "連接埠",
+  "TXT_CODE_2ab036a4": "請輸入遊戲伺服器連接埠",
+  "TXT_CODE_e2dc0156": "列如：25565",
+  "TXT_CODE_2f59807a": "伺服器地址",
+  "TXT_CODE_8e2be926": "請輸入遊戲伺服器 IP 位址，不填寫則預設為守護程式本地主機（localhost）",
+  "TXT_CODE_ddc2de99": "默認值：localhost"
+}

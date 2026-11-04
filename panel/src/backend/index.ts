@@ -1,3 +1,3 @@
 export function apply(_ctx: any) {
-  // Add mc-tools backend services here.
+  // Configuration uses the instance plugin's existing, permission-checked API.
 }

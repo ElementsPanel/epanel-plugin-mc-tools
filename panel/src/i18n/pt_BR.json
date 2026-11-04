@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Aquisição de status do Minecraft",
+  "TXT_CODE_d3de39b4": "Atualização bem-sucedida",
+  "TXT_CODE_abfe9512": "Salvar",
+  "TXT_CODE_57d1929e": "O ElementsPanel utilizará o protocolo Minecraft Ping para tentar obter a quantidade de pessoas online no servidor, versão, latência e outras informações.",
+  "TXT_CODE_6b175558": "Após concluir a configuração, quando a instância estiver em execução, o status do servidor será atualizado a cada minuto.",
+  "TXT_CODE_f49149d0": "Porta",
+  "TXT_CODE_2ab036a4": "Por favor insira a porta do servidor do jogo",
+  "TXT_CODE_e2dc0156": "Exemplo: 25565",
+  "TXT_CODE_2f59807a": "Endereço do servidor",
+  "TXT_CODE_8e2be926": "Por favor, insira o endereço IP do servidor de jogo, deixe em branco para o localhost (localhost) por padrão.",
+  "TXT_CODE_ddc2de99": "Padrão: localhost"
+}

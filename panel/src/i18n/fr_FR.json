@@ -1,0 +1,13 @@
+{
+  "TXT_CODE_40241d8e": "Acquisition du statut Minecraft",
+  "TXT_CODE_d3de39b4": "Mise à jour terminée",
+  "TXT_CODE_abfe9512": "sauvegarder",
+  "TXT_CODE_57d1929e": "ElementsPanel utilisera le protocole Minecraft Ping pour tenter d'obtenir le nombre de personnes en ligne sur le serveur, la version, la latence et d'autres informations.",
+  "TXT_CODE_6b175558": "Une fois la configuration terminée, lorsque l'instance est en cours d'exécution, l'état du serveur est actualisé toutes les minutes.",
+  "TXT_CODE_f49149d0": "Port de connexion",
+  "TXT_CODE_2ab036a4": "Veuillez entrer le port du serveur de jeu",
+  "TXT_CODE_e2dc0156": "Par exemple : 25565",
+  "TXT_CODE_2f59807a": "Adresse du serveur",
+  "TXT_CODE_8e2be926": "Veuillez saisir l'adresse IP du serveur de jeu. Si elle est laissée vide, elle sera par défaut l'hôte local du démon (localhost).",
+  "TXT_CODE_ddc2de99": "Par défaut : localhost"
+}
