@@ -57,6 +57,115 @@ test("viewport limits tile loading and cancels requests, animation frames, and l
   assert.equal(frames.size, 0);
 });
 
+function animatedViewport(t, reduced = false) {
+  const keys = ["ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame", "devicePixelRatio", "Image", "matchMedia"];
+  const original = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  let view;
+  t.after(() => { view?.dispose(); for (const key of keys) { if (original[key]) Object.defineProperty(globalThis, key, original[key]); else delete globalThis[key]; } });
+  const frames = new Map(), listeners = new Map(), requests = [], images = [], markers = [];
+  const motion = { matches: reduced };
+  let now = 0, sequence = 0;
+  t.mock.method(performance, "now", () => now);
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  globalThis.requestAnimationFrame = callback => { frames.set(++sequence, callback); return sequence; };
+  globalThis.cancelAnimationFrame = id => frames.delete(id);
+  globalThis.devicePixelRatio = 1;
+  globalThis.matchMedia = () => motion;
+  globalThis.Image = class { set src(value) { queueMicrotask(() => this.onload()); } };
+  const context = {
+    globalAlpha: 1, setTransform() {}, fillRect() {}, beginPath() {}, arc() {}, stroke() {}, moveTo() {}, lineTo() {},
+    drawImage(image, ...bounds) { images.push({ image, bounds, alpha: this.globalAlpha }); },
+    fill() { markers.push(this.globalAlpha); }
+  };
+  const canvas = {
+    style: {}, getBoundingClientRect: () => ({ left: 10, top: 20, width: 512, height: 256 }), getContext: () => context,
+    setPointerCapture() {}, addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name)
+  };
+  const { MapViewport, worldPosition } = loader()("panel/src/map/viewport.ts");
+  view = new MapViewport(canvas, { id: "world", spawn: { x: 0, z: 0 } }, (world, x, z, signal) => {
+    const gate = deferred(); requests.push({ ...gate, signal }); return gate.promise;
+  }, () => {});
+  const frame = time => { now = time; const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); };
+  const wheel = (deltaY, x = 123, y = 90) => listeners.get("wheel")({ preventDefault() {}, clientX: x + 10, clientY: y + 20, deltaY, deltaMode: 0 });
+  return { view, worldPosition, frames, listeners, requests, images, markers, motion, frame, wheel };
+}
+
+test("map tiles fade from transparent to opaque once per load, leave markers opaque, and stop animation frames when finished", async t => {
+  const f = animatedViewport(t);
+  f.frame(0);
+  f.requests[0].resolve({ image: "test", warnings: 0 });
+  await new Promise(resolve => setImmediate(resolve));
+  f.frame(16);
+  assert.equal(f.images.at(-1).alpha, 0);
+  assert.equal(f.frames.size, 1);
+  f.frame(136);
+  assert(f.images.at(-1).alpha > 0 && f.images.at(-1).alpha < 1);
+  f.frame(256);
+  assert.equal(f.images.at(-1).alpha, 1);
+  assert.equal(f.frames.size, 0);
+  assert(f.markers.every(alpha => alpha === 1));
+  f.view.center(1, 1); f.frame(272);
+  assert.equal(f.images.at(-1).alpha, 1);
+  assert.equal(f.frames.size, 0);
+});
+
+test("wheel zoom eases through intermediate scales, preserves the cursor anchor and accumulates rapid scrolling without jumps", t => {
+  const f = animatedViewport(t);
+  f.frame(0);
+  const anchor = f.worldPosition(f.view.camera, 512, 256, 123, 90);
+  f.wheel(-100);
+  const firstTarget = 2 * Math.exp(.2);
+  assert.equal(f.view.camera.zoom, 2);
+  f.frame(50);
+  const intermediate = f.view.camera.zoom;
+  assert(intermediate > 2 && intermediate < firstTarget);
+  let position = f.worldPosition(f.view.camera, 512, 256, 123, 90);
+  assert(Math.abs(position.x - anchor.x) < 1e-9 && Math.abs(position.z - anchor.z) < 1e-9);
+  f.wheel(-100);
+  assert.equal(f.view.camera.zoom, intermediate);
+  f.frame(150);
+  assert(f.view.camera.zoom > intermediate && f.view.camera.zoom < 2 * Math.exp(.4));
+  f.frame(250);
+  assert(Math.abs(f.view.camera.zoom - 2 * Math.exp(.4)) < 1e-9);
+  position = f.worldPosition(f.view.camera, 512, 256, 123, 90);
+  assert(Math.abs(position.x - anchor.x) < 1e-9 && Math.abs(position.z - anchor.z) < 1e-9);
+  assert.equal(f.frames.size, 0);
+  f.wheel(100); f.frame(300);
+  assert(f.view.camera.zoom > 2 * Math.exp(.2) && f.view.camera.zoom < 2 * Math.exp(.4));
+  f.frame(450);
+  assert(Math.abs(f.view.camera.zoom - firstTarget) < 1e-9);
+});
+
+test("dragging or recentering cancels zoom, reduced motion skips transitions and close removes active animation frames", async t => {
+  const f = animatedViewport(t);
+  f.frame(0); f.wheel(-100); f.frame(50);
+  f.listeners.get("pointerdown")({ button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  const zoom = f.view.camera.zoom;
+  f.frame(400);
+  assert.equal(f.view.camera.zoom, zoom);
+  assert.equal(f.frames.size, 0);
+  f.view.zoom(1.5); f.frame(450);
+  f.view.center(100, 200); f.frame(700);
+  assert.equal(f.view.camera.x, 100); assert.equal(f.view.camera.z, 200);
+  assert.equal(f.frames.size, 0);
+  f.motion.matches = true;
+  const before = f.view.camera.zoom;
+  f.wheel(-100);
+  assert(Math.abs(f.view.camera.zoom - before * Math.exp(.2)) < 1e-9);
+  f.view.center(0, 0);
+  f.requests[0].resolve({ image: "test", warnings: 0 });
+  await new Promise(resolve => setImmediate(resolve));
+  f.frame(716);
+  assert.equal(f.images.at(-1).alpha, 1);
+  assert.equal(f.frames.size, 0);
+  f.motion.matches = false;
+  f.view.zoom(1.5);
+  assert.equal(f.frames.size, 1);
+  f.view.dispose();
+  assert.equal(f.frames.size, 0);
+  assert.equal(f.listeners.size, 0);
+});
+
 test("map API shares authentication, encodes instance parameters, forwards cancellation, and reports protocol errors", async (t) => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
