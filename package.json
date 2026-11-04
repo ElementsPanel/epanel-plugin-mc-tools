@@ -1,7 +1,7 @@
 {
   "name": "epanel-plugin-mc-tools",
   "version": "0.1.0",
-  "description": "Minecraft Java and Bedrock server status and player counts for ElementsPanel",
+  "description": "Minecraft Java and Bedrock server status, player counts and saved world maps for ElementsPanel",
   "license": "Apache-2.0",
   "files": [
     "panel/plugin.json",
@@ -18,16 +18,16 @@
     "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
-    "esbuild": "^0.18.20",
-    "vite": "^4.5.14",
     "@vitejs/plugin-vue": "^4.2.0",
     "@vitejs/plugin-vue-jsx": "^3.1.0",
+    "esbuild": "^0.18.20",
+    "vite": "^4.5.14",
     "vue": "^3.5.42",
     "vuetify": "^4.2.1"
   },
   "peerDependencies": {
-    "@elementspanel/panel": "^1.0.9",
-    "@elementspanel/daemon": "^1.0.7"
+    "@elementspanel/daemon": "^1.0.7",
+    "@elementspanel/panel": "^1.0.9"
   },
   "peerDependenciesMeta": {
     "@elementspanel/panel": {
@@ -46,16 +46,19 @@
       "frontendInject": [
         "console",
         "i18n",
-        "actions",
         "instance"
       ],
       "styles": [
-        "frontend/assets/frontend-275534bd.css"
+        "frontend/assets/frontend-0a9c76d0.css"
       ]
     },
     "daemon": {
       "directory": "daemon",
       "folder": "mc-tools"
     }
+  },
+  "dependencies": {
+    "leveldb-zlib": "^1.2.1",
+    "prismarine-nbt": "^2.8.0"
   }
 }

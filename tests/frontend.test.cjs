@@ -15,8 +15,8 @@ test("Minecraft settings appear in both interfaces only for a scoped Minecraft i
   const load = loader();
   const { apply } = load("panel/src/frontend.ts");
   apply(ctx);
-  assert.equal(actions.length, 1);
-  const action = actions[0];
+  assert.equal(actions.length, 2);
+  const action = actions.find((value) => value.id === "mcstats");
   assert.equal(action.id, "mcstats");
   assert(action.normalComponent);
   assert(action.desktopComponent);
@@ -27,10 +27,35 @@ test("Minecraft settings appear in both interfaces only for a scoped Minecraft i
     assert.equal(action.condition({ ...context, ...change }), false);
   }
   apply(ctx);
-  assert.equal(actions.length, 1);
+  assert.equal(actions.length, 2);
   assert.equal(Object.keys(locales).length, 12);
   const keys = Object.keys(locales.en_us).sort();
   for (const locale of Object.values(locales)) assert.deepEqual(Object.keys(locale).sort(), keys);
+});
+
+test("saved map action supports both editions, requires node support, and registers alongside a legacy status action", () => {
+  const actions = [{ id: "mcstats" }];
+  const ctx = {
+    i18n: { define() {}, translate: (key) => key },
+    actions: { instances: actions, instance(action) { actions.push(action); } }
+  };
+  const { apply } = loader()("panel/src/frontend.ts");
+  apply(ctx);
+  apply(ctx);
+  assert.equal(actions.length, 2);
+  const action = actions.find((value) => value.id === "mc-world-map");
+  assert(action.normalComponent);
+  assert(action.desktopComponent);
+  const context = { instanceId: "server", daemonId: "node", daemon: { features: { mcWorldMap: true } } };
+  for (const type of ["minecraft/java", "minecraft/java/paper", "minecraft/bedrock"]) {
+    assert.equal(action.condition({ ...context, instanceInfo: { config: { type } } }), true);
+  }
+  const instanceInfo = { config: { type: "minecraft/java" } };
+  for (const change of [{ instanceId: "" }, { daemonId: "" }, { isGlobalTerminal: true }, { daemon: {} }, { instanceInfo: { config: { type: "minecraft/java/bungeecord" } } }, { instanceInfo: { config: { type: "steam/universal" } } }]) {
+    assert.equal(action.condition({ ...context, instanceInfo, ...change }), false);
+  }
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.deepEqual(metadata.elementspanel.panel.frontendInject, ["console", "i18n", "instance"]);
 });
 
 function settingsFixture() {

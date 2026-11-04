@@ -13,6 +13,7 @@ export interface MinecraftInstance {
     latency?: number;
   };
   resetPingInfo(): void;
+  absoluteCwdPath(): string;
   execPreset(name: string): Promise<unknown>;
   getPreset(name: string): unknown;
   setPreset(name: string, command: unknown): void;
@@ -35,7 +36,7 @@ export interface McToolsDaemonContext extends Context {
   instances: {
     Command: new (name: string) => object;
     Instance: { STATUS_RUNNING: number };
-    subsystem: { getInstances(): MinecraftInstance[] };
+    subsystem: { getInstances(): MinecraftInstance[]; getInstance(id: string): MinecraftInstance | undefined };
   };
   features: { add(name: string): () => void };
   presets: {
@@ -44,5 +45,10 @@ export interface McToolsDaemonContext extends Context {
   };
   instanceLifecycle: {
     register(factory: (instance: MinecraftInstance) => MinecraftStatusTask | undefined): () => void;
+  };
+  protocol: {
+    on(event: string, handler: (request: any, data: unknown) => void): () => void;
+    response(request: any, data: unknown): void;
+    responseError(request: any, error: Error, options?: { disablePrint: boolean }): void;
   };
 }

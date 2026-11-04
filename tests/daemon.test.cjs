@@ -25,6 +25,7 @@ function fixture(existing = []) {
     scope: { isActive: true },
     instances: { Command: class { constructor(name) { this.name = name; } }, Instance: { STATUS_RUNNING: 3 }, subsystem: { getInstances: () => existing } },
     features: { add(name) { features.add(name); effects.push(() => features.delete(name)); } },
+    protocol: { on() { effects.push(() => {}); }, response() {}, responseError() {} },
     presets: { entries: () => presets, register(name, factory) { assert(!presets.has(name)); presets.set(name, factory); effects.push(() => presets.delete(name)); } },
     instanceLifecycle: { register(factory) { factories.push(factory); effects.push(() => factories.splice(factories.indexOf(factory), 1)); } },
     setInterval(callback, delay) {
@@ -101,6 +102,7 @@ test("plugin attaches restored instances, polls once a minute, and removes all c
   f.load("daemon/src/backend/index.ts").apply(f.ctx);
   await Promise.resolve();
   assert(f.features.has("mcstats"));
+  assert(f.features.has("mcWorldMap"));
   assert(f.presets.has("refreshPlayers"));
   assert.equal(f.factories.length, 1);
   assert.equal(f.factories[0](other), undefined);
@@ -140,7 +142,7 @@ test("a plugin re-enable replaces inactive instance presets instead of retaining
   await second.dispose();
 });
 
-test("older instance plugins retain exactly one status preset and poller", () => {
+test("older instance plugins retain exactly one status preset and poller", async () => {
   const f = fixture([instance()]);
   const legacy = () => ({});
   f.presets.set("refreshPlayers", legacy);
@@ -148,6 +150,8 @@ test("older instance plugins retain exactly one status preset and poller", () =>
   assert.equal(f.presets.get("refreshPlayers"), legacy);
   assert.equal(f.factories.length, 0);
   assert.equal(f.timers.size, 0);
+  assert(f.features.has("mcWorldMap"));
+  await f.dispose();
 });
 
 test("Cordis dependency removal unloads the external plugin and clears restored instance tasks", async (t) => {
@@ -156,6 +160,12 @@ test("Cordis dependency removal unloads the external plugin and clears restored 
   t.after(() => ctx.stop());
   const value = instance();
   const features = new Set(), presets = new Map(), factories = [];
+  ctx.plugin(class extends Service {
+    constructor(scope) { super(scope, "protocol", true); }
+    on() {}
+    response() {}
+    responseError() {}
+  });
   ctx.plugin(class extends Service {
     constructor(scope) { super(scope, "features", true); }
     add(name) { return this.ctx.effect(() => { features.add(name); return () => features.delete(name); }); }
