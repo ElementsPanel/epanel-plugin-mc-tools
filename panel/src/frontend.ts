@@ -4,6 +4,8 @@ import DesktopMcPing from "./DesktopMcPing.vue";
 import { localeMessages } from "./i18n";
 import WorldMapDialog from "./map/WorldMapDialog.vue";
 import WorldMapView from "./map/WorldMapView.vue";
+import PlayersDialog from "./players/PlayersDialog.vue";
+import PlayersView from "./players/PlayersView.vue";
 
 export const inject = ["console", "i18n", "actions", "instance"];
 
@@ -41,5 +43,21 @@ export function apply(ctx: PanelFrontendPluginContext) {
     },
     desktopInitialWidth: 1100,
     desktopInitialHeight: 750
+  });
+  if (!ctx.actions.instances.some((action) => action.id === "mc-players")) ctx.actions.instance({
+    id: "mc-players",
+    title: () => ctx.i18n.translate("MC_PLAYERS_TITLE"),
+    icon: "mdi-account-group-outline",
+    mdiIcon: "mdi-account-group-outline",
+    normalComponent: PlayersDialog,
+    desktopComponent: PlayersView,
+    condition: ({ instanceId, daemonId, isGlobalTerminal, instanceInfo, daemon }) => {
+      const type = String((instanceInfo as any)?.config?.type ?? "");
+      return !isGlobalTerminal && Boolean(instanceId && daemonId) &&
+        Boolean((daemon as any)?.features?.mcPlayers) &&
+        (type.startsWith("minecraft/java") || type.startsWith("minecraft/bedrock")) && !type.includes("bungeecord") && !type.includes("velocity");
+    },
+    desktopInitialWidth: 1000,
+    desktopInitialHeight: 720
   });
 }

@@ -1,6 +1,6 @@
 # epanel-plugin-mc-tools
 
-Minecraft Java / Bedrock server status and saved world maps for ElementsPanel. Install and enable
+Minecraft Java / Bedrock server status, saved world maps and player management for ElementsPanel. Install and enable
 `mc-tools` on the panel and on each daemon that hosts Minecraft instances.
 
 Open **Minecraft 状态获取 / Minecraft Status** in the instance actions (normal or
@@ -62,6 +62,55 @@ appear. Map API calls require a logged-in user with access to the selected
 instance. Paths are resolved inside the instance directory; world IDs returned
 to the browser contain no filesystem paths. Reading does not issue server
 commands or modify the save. Large Bedrock snapshots can take longer to load.
+
+Open **玩家管理 / Player Management** in the instance console's function group
+to view online and known players, search by name/UUID/XUID, and filter allowlists,
+operators and bans. Normal mode opens a dialog with a footer close button;
+desktop mode opens a managed window. Lists refresh every 15 seconds while the
+window is visible. Select **Manage** on a row or enter a player name, choose an
+action, and execute it. Actions include kick, ban/unban, allowlist add/remove,
+operator grant/revoke, all four game modes, and teleporting to coordinates or
+another player. Bedrock's dedicated server has no built-in ban/unban commands,
+so those actions are only offered for Java.
+
+Java online lists use the GameSpy4 **Query full-stat protocol** over UDP,
+without sending `list` to the console. When opening player management for a
+Java instance with Query disabled, a dialog asks whether to enable it and
+restart. **Cancel** leaves the configuration and process unchanged. Confirming
+**Enable and restart** sets `enable-query=true` in the instance's
+`server.properties` and requests a restart through the host's existing preset.
+The dialog appears once per window opening, including for stopped instances;
+instances that already enable Query do not prompt or restart again. The file's
+other properties, comments, line endings and permissions are preserved. Saving
+errors prevent restarting; restart request errors explicitly ask for a manual
+restart. Alternatively, enable Query manually and restart the Minecraft server:
+
+```properties
+enable-query=true
+query.port=25565
+```
+
+The daemon reads `query.port` (default `25565`, independent of the game/Ping
+port). It uses the address from Minecraft Status settings when supplied,
+otherwise `server-ip`, otherwise local loopback. Query's UDP port must be
+reachable from the daemon; containers may require a UDP port mapping. The
+plugin changes the enable flag and requests a restart only after confirmation. Disabled,
+unreachable, malformed or incomplete Query responses show a warning and
+unknown online status; Java does not fall back to console polling. Bedrock
+continues to obtain its online list through the console `list` command.
+
+Management actions use the instance's existing console command preset and
+require no extra RCON configuration. They listen for native command responses,
+report rejections, and do not claim success when a command is not confirmed.
+Servers or plugins that change the standard English console responses may need
+their console checked manually. Saved Java player caches, allowlists, operators
+and active bans, plus Bedrock allowlists and XUID permissions, remain readable
+while stopped; actions require a running server. These files are never edited
+by the plugin. All player routes require access to the selected instance, and
+commands validate player names, reasons, modes and teleport destinations on
+both the panel and daemon. Closing the view cancels its refresh timer and HTTP
+requests; daemon requests clean up their sockets/listeners on response, timeout, stop
+or plugin unload.
 
 Older instance packages (including `@elementspanel/epanel-plugin-instance@1.0.11`)
 already supply `refreshPlayers` and the `mcstats` action. When either is present,

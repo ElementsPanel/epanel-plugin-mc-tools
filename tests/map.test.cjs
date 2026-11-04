@@ -387,7 +387,7 @@ test("map panel routes run instance authorization before forwarding and validate
       Request: class { async request(event, data) { calls.push({ event, data }); return ["map"]; } }
     }
   };
-  load("panel/src/backend/index.ts").apply(ctx);
+  load("panel/src/backend/index.ts").registerWorldMapRoutes(ctx);
   async function request(route, query, denied = false) {
     const value = { query: { uuid: "server", daemonId: "node", ...query }, denied };
     const handlers = routes.get(route);

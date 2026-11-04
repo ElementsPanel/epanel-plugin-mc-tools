@@ -15,7 +15,7 @@ test("Minecraft settings appear in both interfaces only for a scoped Minecraft i
   const load = loader();
   const { apply } = load("panel/src/frontend.ts");
   apply(ctx);
-  assert.equal(actions.length, 2);
+  assert.equal(actions.length, 3);
   const action = actions.find((value) => value.id === "mcstats");
   assert.equal(action.id, "mcstats");
   assert(action.normalComponent);
@@ -27,7 +27,7 @@ test("Minecraft settings appear in both interfaces only for a scoped Minecraft i
     assert.equal(action.condition({ ...context, ...change }), false);
   }
   apply(ctx);
-  assert.equal(actions.length, 2);
+  assert.equal(actions.length, 3);
   assert.equal(Object.keys(locales).length, 12);
   const keys = Object.keys(locales.en_us).sort();
   for (const locale of Object.values(locales)) assert.deepEqual(Object.keys(locale).sort(), keys);
@@ -42,7 +42,7 @@ test("saved map action supports both editions, requires node support, and regist
   const { apply } = loader()("panel/src/frontend.ts");
   apply(ctx);
   apply(ctx);
-  assert.equal(actions.length, 2);
+  assert.equal(actions.length, 3);
   const action = actions.find((value) => value.id === "mc-world-map");
   assert(action.normalComponent);
   assert(action.desktopComponent);

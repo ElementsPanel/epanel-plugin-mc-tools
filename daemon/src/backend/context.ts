@@ -14,7 +14,7 @@ export interface MinecraftInstance {
   };
   resetPingInfo(): void;
   absoluteCwdPath(): string;
-  execPreset(name: string): Promise<unknown>;
+  execPreset(name: string, parameter?: unknown): Promise<unknown>;
   getPreset(name: string): unknown;
   setPreset(name: string, command: unknown): void;
   status(): number;

@@ -1,7 +1,7 @@
 {
   "name": "epanel-plugin-mc-tools",
   "version": "0.1.0",
-  "description": "Minecraft Java and Bedrock server status, player counts and saved world maps for ElementsPanel",
+  "description": "Minecraft Java and Bedrock server status, saved world maps and player management for ElementsPanel",
   "license": "Apache-2.0",
   "files": [
     "panel/plugin.json",
@@ -49,7 +49,7 @@
         "instance"
       ],
       "styles": [
-        "frontend/assets/frontend-0a9c76d0.css"
+        "frontend/assets/frontend-32ac7b59.css"
       ]
     },
     "daemon": {

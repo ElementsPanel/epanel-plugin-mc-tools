@@ -1,8 +1,9 @@
 import type { Context } from "cordis";
 import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, mapCoordinate } from "../../../shared/map";
+import { registerPlayerRoutes } from "./players";
 
 export interface MapPanelContext extends Context {
-  koa: { router(prefix: string): { get(path: string, ...handlers: any[]): void } };
+  koa: { router(prefix: string): { get(path: string, ...handlers: any[]): void; post(path: string, ...handlers: any[]): void } };
   roles: { USER: number };
   middleware: {
     permission(options: { level: number; speedLimit: boolean }): any;
@@ -18,6 +19,11 @@ export interface MapPanelContext extends Context {
 export const inject = ["koa", "middleware", "roles", "remote"];
 
 export function apply(ctx: MapPanelContext) {
+  registerWorldMapRoutes(ctx);
+  registerPlayerRoutes(ctx);
+}
+
+export function registerWorldMapRoutes(ctx: MapPanelContext) {
   const router = ctx.koa.router("/api/mc-tools/map");
   const { permission, validator, instanceAccess } = ctx.middleware;
   for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT]]) {
