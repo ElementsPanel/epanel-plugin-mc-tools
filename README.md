@@ -28,8 +28,35 @@ the backdrop, use its close button or press Escape to close it. Drag to
 pan, scroll or use the buttons to zoom, choose a world/dimension, enter X/Z to
 jump, or return to spawn. The gold marker shows spawn; checkerboard areas have
 no readable saved terrain. Use **Refresh** after saving changes on the server.
-The viewer renders a top-down map with approximate block colors and height
+The 2D viewer renders a top-down map with approximate block colors and height
 shading, and only reads chunks in the visible area. It does not generate chunks.
+
+The **3D** button at the top right switches both the console map and the public
+page to a perspective scene built from the saved blocks. Drag to orbit, use a
+right-button drag or a two-finger drag to pan, and scroll or pinch to zoom.
+Arrow keys pan when the scene has keyboard focus. **2D** returns to the overhead
+map. Switching renderers and refreshing preserve the position, zoom and selected
+layer. The 3D renderer loads nearby terrain progressively and releases its GPU
+resources when closed. It requires WebGL 2; an unavailable or lost graphics
+context returns the viewer to 2D with an explanation.
+
+The 3D scene uses the official Minecraft Java **26.2** block textures imported
+from the supplied client JAR, including water/lava animation frames, transparent
+leaves and glass, grass-side overlays and Java biome tint palettes. Flat ground
+decorations such as leaf litter stay flat and use the original dry-foliage colors;
+crossed plant models remain crossed planes. Its face
+brightness, corner ambient occlusion, pixel sampling and distance fog follow
+the Java terrain renderer's style. This is a saved-block preview with daytime
+lighting: entities and block-entity models are not simulated, and some non-cube
+block shapes are approximated by cubes or crossed planes. Terrain beyond the
+local viewing distance loads as the map is moved. Very complex saves have bounded
+geometry and memory use, with a notice if nearby terrain must take priority.
+
+The imported atlas is included in the build; visitors do not need a client JAR.
+To regenerate it from another locally supplied client, install Pillow and run
+`python3 scripts/import-minecraft-assets.py /path/to/client.jar` before building.
+Its source version and hashes are recorded in
+`panel/src/assets/minecraft/source.json`. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
 Choose **水平切面 / Horizontal slice** in the view selector to inspect the blocks
 at a specific Y coordinate. Drag the slider next to the view selector to move
@@ -43,7 +70,9 @@ appear empty. Air stays transparent, so a slice does not show blocks above or
 below the selected layer. Checkerboard
 areas indicate air or unsaved chunks. Layer changes preserve position and zoom;
 choose **地表 / Surface** to return to the terrain overview. Both Java and
-Bedrock saves support slices, including the Nether ceiling.
+Bedrock saves support slices, including the Nether ceiling. In 3D, this control
+cuts away the terrain above the chosen Y level and shows the exposed blocks at
+and below it, including a newly exposed top surface.
 
 Java saves use Anvil `.mca` regions, including legacy numeric blocks and modern
 NBT palettes with negative heights. Legacy `Name` palettes and the 26.x string,
@@ -98,7 +127,8 @@ map, including on mobile screens. Both map views omit the direction indicator.
 The catalogue is available at `https://your-panel/#/mc-tools/map`, or under
 the panel's existing base path. A single map can be opened with
 `#/mc-tools/map?map=alias`. **当前视图链接 / Link to this view** retains the map's
-position, zoom and horizontal slice, including Y=0 and negative heights. The
+position, zoom, horizontal slice and 3D mode, including Y=0 and negative heights.
+Add `render=3d` to a public map link to open directly in 3D. The
 instance map also shows a standalone-page link for worlds that have been opened
 to the public, and administrators can open map management directly from it.
 

@@ -265,6 +265,12 @@ test("map API shares authentication, encodes instance parameters, forwards cance
     assert.equal(new URL(requests.at(-1).url, "http://localhost").searchParams.get("y"), String(y));
     assert.equal(requests.at(-1).options.signal, signal);
   }
+  await api.scene("a".repeat(24), -1, 2, signal, 0);
+  const scene = new URL(requests.at(-1).url, "http://localhost");
+  assert.equal(scene.pathname, "/api/mc-tools/map/scene");
+  assert.equal(scene.searchParams.get("y"), "0");
+  assert.equal(requests.at(-1).options.headers.Authorization, "Bearer token");
+  assert.equal(authentications, 1);
   await api.worlds(signal, true);
   assert.equal(authentications, 2);
   globalThis.fetch = async () => ({ ok: false, json: async () => ({ status: 403, data: "Forbidden" }) });
@@ -299,7 +305,7 @@ test("map view validates coordinates and layers, retains the selected layer on r
     "../settings": { t: (key) => key },
     "./api": { mapError: (error) => error.message, worldMapApi: () => ({ worlds: async (signal) => { signals.push(signal); return worlds; }, tile: () => {} }) },
     "./viewport": { MapViewport: class {
-      constructor(canvas, world, load, changed, y) { this.world = world; this.layer = y; renderers.push(this); }
+      constructor(canvas, world, load, changed, y) { this.camera = { ...world.spawn, zoom: 2 }; this.world = world; this.layer = y; renderers.push(this); }
       dispose() { this.disposed = true; }
       center(x, z) { this.target = { x, z }; }
       setLayer(y) { this.layer = y; }

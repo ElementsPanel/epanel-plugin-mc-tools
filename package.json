@@ -10,6 +10,7 @@
     "daemon/plugin.json",
     "daemon/backend/",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE"
   ],
   "scripts": {
@@ -18,6 +19,7 @@
     "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
+    "@types/three": "^0.187.0",
     "@vitejs/plugin-vue": "^4.2.0",
     "@vitejs/plugin-vue-jsx": "^3.1.0",
     "esbuild": "^0.18.20",
@@ -49,7 +51,7 @@
         "instance"
       ],
       "styles": [
-        "frontend/assets/frontend-2461e61a.css"
+        "frontend/assets/frontend-8acc171e.css"
       ]
     },
     "daemon": {
@@ -59,6 +61,7 @@
   },
   "dependencies": {
     "leveldb-zlib": "^1.2.1",
-    "prismarine-nbt": "^2.8.0"
+    "prismarine-nbt": "^2.8.0",
+    "three": "^0.187.0"
   }
 }

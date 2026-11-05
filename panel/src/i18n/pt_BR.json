@@ -152,5 +152,14 @@
   "MC_MAP_CANCEL": "Cancelar",
   "MC_MAP_CONTROLS": "Configurações do mapa",
   "MC_MAP_CONTROLS_OPEN": "Abrir configurações do mapa",
-  "MC_MAP_CONTROLS_CLOSE": "Fechar configurações do mapa"
+  "MC_MAP_CONTROLS_CLOSE": "Fechar configurações do mapa",
+  "MC_MAP_3D_ENTER": "Mudar para a cena 3D",
+  "MC_MAP_3D_EXIT": "Mudar para o mapa 2D",
+  "MC_MAP_3D_SCENE": "Cena 3D do mundo salvo",
+  "MC_MAP_3D_HINT": "Arraste para girar, use o botão direito ou dois dedos para mover e a roda ou pinça para ampliar. As setas também movem a vista.",
+  "MC_MAP_3D_SLICE_HINT": "O corte 3D mostra os blocos na altura Y escolhida e abaixo dela. Mova o controle para cortar o terreno.",
+  "MC_MAP_3D_LOADING": "Carregando a cena 3D…",
+  "MC_MAP_3D_EMPTY": "Não há blocos salvos por perto. Escolha outras coordenadas ou volte ao ponto de surgimento.",
+  "MC_MAP_WEBGL_UNAVAILABLE": "Este navegador não consegue exibir a cena 3D. Retornamos ao 2D; ative a aceleração de hardware e tente novamente.",
+  "MC_MAP_SCENE_LIMIT": "Esta cena é muito complexa. O terreno próximo tem prioridade; amplie ou mova-se para explorar mais."
 }

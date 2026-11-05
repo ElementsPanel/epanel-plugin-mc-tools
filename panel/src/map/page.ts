@@ -3,6 +3,10 @@ import { MAP_LIMIT, MAP_PAGE_PATH, MAP_SETTINGS_PATH, mapHeight, publicMapId, ty
 export function mapPageLocation(query: Record<string, unknown>) {
   const view: MapViewOptions = {};
   const map = query.map === undefined ? undefined : publicMapId(query.map);
+  if (query.render !== undefined) {
+    if (query.render !== "2d" && query.render !== "3d") throw new Error("MC_MAP_INVALID");
+    if (query.render === "3d") view.render = "3d";
+  }
   for (const key of ["x", "z", "zoom", "y"] as const) {
     if (query[key] === undefined) continue;
     const raw = query[key];
@@ -22,6 +26,7 @@ export function mapPageLocation(query: Record<string, unknown>) {
 export function publicMapUrl(map: string, view: MapViewOptions = {}, base = location.href) {
   const query = new URLSearchParams({ map: publicMapId(map) });
   for (const key of ["x", "z", "zoom", "y"] as const) if (view[key] !== undefined) query.set(key, String(view[key]));
+  if (view.render === "3d") query.set("render", "3d");
   const url = new URL(base);
   url.search = "";
   url.hash = MAP_PAGE_PATH + "?" + query;

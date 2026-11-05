@@ -1,7 +1,7 @@
 import type { LevelDB } from "leveldb-zlib";
 import { protos, simplify } from "prismarine-nbt";
 import { isAir, legacyBlockName } from "./colors";
-import { surfaceFromLayers, type BlockLayer } from "./chunk";
+import { blockProperties, surfaceFromLayers, type BlockLayer } from "./chunk";
 
 export function bedrockKey(x: number, z: number, dimension: number, tag: number, y?: number) {
   const key = Buffer.alloc((dimension === 0 ? 8 : 12) + (y === undefined ? 1 : 2));
@@ -28,7 +28,7 @@ export function bedrockLayer(data: Buffer, y: number): BlockLayer {
   let offset = version === 1 ? 1 : version === 9 ? 3 : 2;
   const count = version === 1 ? 1 : data[1];
   if (count > 8 || (version === 9 && data.readInt8(2) !== y)) throw new Error("MC_MAP_CORRUPT");
-  const storages: ((index: number) => string)[] = [];
+  const storages: ((index: number) => { name: string; properties?: Readonly<Record<string, string>> })[] = [];
   for (let layer = 0; layer < count; layer++) {
     if (offset >= data.length) throw new Error("MC_MAP_CORRUPT");
     const header = data[offset++], bits = header >> 1;
@@ -41,32 +41,33 @@ export function bedrockLayer(data: Buffer, y: number): BlockLayer {
     const size = bits ? data.readUInt32LE(offset) : 1;
     if (bits) offset += 4;
     if (size < 1 || size > 4096 || size > 2 ** bits) throw new Error("MC_MAP_CORRUPT");
-    const names: string[] = [];
+    const states: { name: string; properties?: Readonly<Record<string, string>> }[] = [];
     for (let index = 0; index < size; index++) {
       const parsed = protos.little.parsePacketBuffer("nbt", data, offset);
-      const name = simplify(parsed.data).name;
+      const state = simplify(parsed.data), name = state.name;
       if (typeof name !== "string" || !parsed.metadata.size) throw new Error("MC_MAP_CORRUPT");
-      names.push(name);
+      states.push({ name, properties: blockProperties(state.states) });
       offset += parsed.metadata.size;
     }
     const mask = 2 ** bits - 1;
     storages.push((index) => {
       const paletteIndex = bits ? (data.readUInt32LE(start + Math.floor(index / perWord) * 4) >>> ((index % perWord) * bits)) & mask : 0;
       if (paletteIndex >= size) throw new Error("MC_MAP_CORRUPT");
-      return names[paletteIndex];
+      return states[paletteIndex];
     });
   }
-  return { y, block: (index) => {
+  const state = (index: number) => {
     const packed = ((index & 15) << 8) | (((index >> 4) & 15) << 4) | (index >> 8);
     for (const storage of storages) {
-      const name = storage(packed);
-      if (!isAir(name)) return name;
+      const state = storage(packed);
+      if (!isAir(state.name)) return state;
     }
-    return "air";
-  } };
+    return { name: "air" };
+  };
+  return { y, block: index => state(index).name, properties: index => state(index).properties };
 }
 
-export async function bedrockSurface(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {
+export async function bedrockLayers(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {
   const prefix = bedrockKey(x, z, dimension, 47);
   const key = sliceY === undefined ? undefined : bedrockKey(x, z, dimension, 47, Math.floor(sliceY / 16));
   const iterator = db.getIterator(key
@@ -87,5 +88,10 @@ export async function bedrockSurface(db: LevelDB, x: number, z: number, dimensio
   } finally { await iterator.end(); }
   if (!found) return undefined;
   layers.sort((a, b) => b.y - a.y);
-  return { ...surfaceFromLayers(layers, dimension === 1, sliceY), warnings };
+  return { layers, warnings };
+}
+
+export async function bedrockSurface(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {
+  const chunk = await bedrockLayers(db, x, z, dimension, sliceY);
+  return chunk && { ...surfaceFromLayers(chunk.layers, dimension === 1, sliceY), warnings: chunk.warnings };
 }

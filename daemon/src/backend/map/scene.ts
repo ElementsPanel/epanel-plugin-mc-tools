@@ -1,0 +1,174 @@
+import { MAP_MAX_Y, MAP_MIN_Y, MAP_SCENE_MAX_QUADS, MAP_SCENE_SIZE, type MapSceneTile } from "../../../../shared/map";
+import { minecraftAssets, SceneKind, SCENE_EMISSIVE, SCENE_GRASS_OVERLAY, SCENE_GROUND, type MinecraftBlock } from "../../../../shared/scene";
+import type { BlockLayer } from "./chunk";
+import { isAir } from "./colors";
+
+export interface SceneChunk { x: number; z: number; layers: BlockLayer[] }
+interface Material { name: string; color: number; model: MinecraftBlock; kind: SceneKind; emissive: boolean }
+const SIZE = MAP_SCENE_SIZE, AREA = SIZE * SIZE;
+const STRIDE = SIZE + 2, PADDED_AREA = STRIDE * STRIDE;
+const plants = /^(?:short_grass|tall_grass|fern|large_fern|dead_bush|.*sapling|dandelion|poppy|blue_orchid|allium|azure_bluet|.*tulip|oxeye_daisy|cornflower|lily_of_the_valley|wither_rose|sunflower|lilac|rose_bush|peony|wheat|carrots|potatoes|beetroots|brown_mushroom|red_mushroom|sugar_cane|vine|cave_vines|kelp|seagrass|tall_seagrass)$/;
+// BlockColors registers only these plants/leaves for biome tinting. In particular,
+// cherry, pale oak and azalea leaves retain the colors already in their sprites.
+const grassTint = new Set(["grass_block", "short_grass", "tall_grass", "fern", "large_fern", "potted_fern", "bush", "sugar_cane", "pink_petals", "wildflowers"]);
+const foliageTint = new Set(["oak_leaves", "jungle_leaves", "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "vine"]);
+
+const missingModel: MinecraftBlock = { faces: [0, 0, 0, 0, 0, 0], tint: 0, overlay: 0, kind: SceneKind.Opaque };
+function material(block: string, biome = "minecraft:plains", upper = false): Material {
+  const raw = block.replace(/^.*:/, ""), name = raw === "grass" ? "grass_block" : raw.replace(/^flowing_/, "");
+  const model = (upper ? minecraftAssets.blocks[name + "[half=upper]"] : undefined) ?? minecraftAssets.blocks[name] ?? missingModel;
+  const colors = minecraftAssets.biomes[biome] ?? minecraftAssets.biomes["minecraft:plains"];
+  const color = name === "water" ? colors[2] : name === "leaf_litter" ? colors[3] : name === "spruce_leaves" ? 0x619961 : name === "birch_leaves" ? 0x80a755
+    : foliageTint.has(name) ? colors[1] : name === "lily_pad" ? 0x208030 : name === "redstone_wire" ? 0x4c0000 : grassTint.has(name) ? colors[0] : 0xffffff;
+  return { name, color, model, kind: model.shape || plants.test(name) ? SceneKind.Plant : model.kind,
+    emissive: /^(?:lava|glowstone|sea_lantern|shroomlight|jack_o_lantern|torch|soul_torch|lantern|soul_lantern|end_rod|ochre_froglight|verdant_froglight|pearlescent_froglight)$/.test(name) };
+}
+
+/** Cull hidden voxel faces, then merge coplanar faces of the same block material. */
+export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: number, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "heights" | "limited">> {
+  const cap = sliceY ?? (nether ? 120 : MAP_MAX_Y);
+  const layers = chunks.flatMap(chunk => chunk.layers).filter(layer => layer.y * 16 <= cap);
+  const minY = layers.length ? Math.max(MAP_MIN_Y, Math.min(...layers.map(layer => layer.y * 16))) : 0;
+  const maxY = layers.length ? Math.min(cap, Math.max(...layers.map(layer => layer.y * 16 + 15))) : -1;
+  const height = Math.max(0, maxY - minY + 1);
+  // Keep a one-block halo for face culling and AO, but emit only the owned tile.
+  const voxels = new Uint16Array(PADDED_AREA * (height + 2));
+  const indexOf = (x: number, y: number, z: number) => (y + 1) * PADDED_AREA + (z + 1) * STRIDE + x + 1;
+  const materials: Material[] = [{ name: "air", color: 0xffffff, model: missingModel, kind: SceneKind.Opaque, emissive: false }];
+  const names = new Map<string, number>();
+  const base = new Map<string, Material>();
+  const palette = (name: string, biome?: string, properties?: Readonly<Record<string, string>>) => {
+    const upper = properties?.half === "upper" || properties?.upper_block_bit === "1" || properties?.upper_block_bit === "true";
+    const state = name + (upper ? "[half=upper]" : "");
+    let source = base.get(state);
+    if (!source) { source = material(name, undefined, upper); base.set(state, source); }
+    const tinted = source.color !== 0xffffff && !!(source.model.tint || source.model.overlay);
+    const key = tinted ? state + "@" + (biome ?? "minecraft:plains") : state;
+    let id = names.get(key);
+    if (id !== undefined) return id;
+    if (isAir(name)) id = 0;
+    else {
+      if (materials.length >= 65536) throw new Error("MC_MAP_CORRUPT");
+      id = materials.length;
+      materials.push(tinted && biome ? material(name, biome, upper) : source);
+    }
+    names.set(key, id);
+    return id;
+  };
+  for (const chunk of [...chunks, ...neighbors]) {
+    const firstX = Math.max(0, -1 - chunk.x * 16), lastX = Math.min(16, SIZE + 1 - chunk.x * 16);
+    const firstZ = Math.max(0, -1 - chunk.z * 16), lastZ = Math.min(16, SIZE + 1 - chunk.z * 16);
+    for (const layer of chunk.layers) {
+      if (disposed()) throw new Error("MC_MAP_UNAVAILABLE");
+      for (let y = 0; y < 16; y++) {
+        const worldY = layer.y * 16 + y;
+        if (worldY < minY - 1 || worldY > maxY + 1 || worldY > cap) continue;
+        for (let z = firstZ; z < lastZ; z++) for (let x = firstX; x < lastX; x++) {
+          const index = y * 256 + z * 16 + x;
+          voxels[indexOf(chunk.x * 16 + x, worldY - minY, chunk.z * 16 + z)] = palette(layer.block(index), layer.biome?.(index), layer.properties?.(index));
+        }
+      }
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  }
+
+  const heights = Buffer.alloc(AREA * 2);
+  for (let z = -1; z <= SIZE; z++) for (let x = -1; x <= SIZE; x++) {
+    const owned = x >= 0 && x < SIZE && z >= 0 && z < SIZE, column = z * SIZE + x;
+    if (owned) heights.writeInt16LE(-32768, column * 2);
+    let open = !nether || sliceY !== undefined;
+    for (let y = height - 1; y >= 0; y--) {
+      const index = indexOf(x, y, z), id = voxels[index];
+      // The default Nether view opens its ceiling, as the 2D surface view does.
+      if (!open) { if (!id) open = true; else voxels[index] = 0; continue; }
+      if (id) { if (owned) heights.writeInt16LE(y + minY, column * 2); break; }
+    }
+  }
+
+  const bytes = Buffer.alloc(MAP_SCENE_MAX_QUADS * 16);
+  let count = 0, limited = false;
+  const quad = (x: number, y: number, z: number, width: number, tall: number, face: number, id: number, ao = 0) => {
+    if (count >= MAP_SCENE_MAX_QUADS) { limited = true; return; }
+    const source = materials[id];
+    const side = face < 6 ? face : 4, overlay = !!(source.model.overlay & (1 << side));
+    const color = (source.model.tint & (1 << side)) || overlay ? source.color : 0xffffff;
+    const texture = source.model.faces[side];
+    const offset = count++ * 16;
+    bytes[offset] = x; bytes[offset + 1] = z; bytes.writeInt16LE(y + minY, offset + 2);
+    bytes.writeUInt16LE(width, offset + 4); bytes.writeUInt16LE(tall, offset + 6);
+    bytes[offset + 8] = face; bytes[offset + 9] = source.kind | (overlay ? SCENE_GRASS_OVERLAY : 0) | (source.emissive ? SCENE_EMISSIVE : 0) | (source.model.shape === "ground" ? SCENE_GROUND : 0);
+    bytes.writeUInt16LE(texture, offset + 10);
+    bytes[offset + 12] = color >> 16; bytes[offset + 13] = color >> 8; bytes[offset + 14] = color; bytes[offset + 15] = source.emissive ? 0 : ao;
+  };
+  const cell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : voxels[indexOf(x, y, z)];
+  const cube = (id: number) => id && materials[id].kind !== SceneKind.Plant ? id : 0;
+  const occludes = (neighbor: number, current: number) => {
+    if (!neighbor) return false;
+    if (neighbor === current || materials[neighbor].name === materials[current].name) return true;
+    return materials[neighbor].kind === SceneKind.Opaque;
+  };
+  const dimensions = [SIZE, height, SIZE];
+  // The cyclic U/V axes give positive-facing winding; negative faces reverse it in the viewer.
+  for (let axis = 0; axis < 3 && !limited; axis++) {
+    const u = (axis + 1) % 3, v = (axis + 2) % 3;
+    const width = dimensions[u], tall = dimensions[v];
+    const mask = new Uint32Array(width * tall), position = [0, 0, 0];
+    for (let plane = 0; plane <= dimensions[axis] && !limited; plane++) {
+      if (disposed()) throw new Error("MC_MAP_UNAVAILABLE");
+      for (let sign = 0; sign < 2 && !limited; sign++) {
+        for (let j = 0; j < tall; j++) for (let i = 0; i < width; i++) {
+          position[u] = i; position[v] = j; position[axis] = plane - 1;
+          const a = cube(cell(position[0], position[1], position[2]));
+          position[axis] = plane;
+          const b = cube(cell(position[0], position[1], position[2]));
+          const owned = sign ? plane < dimensions[axis] : plane > 0;
+          const current = owned ? sign ? b : a : 0, neighbor = sign ? a : b;
+          let ao = 0;
+          if (current && !occludes(neighbor, current) && materials[current].kind !== SceneKind.Translucent && !materials[current].emissive) {
+            const point = [...position]; point[axis] = sign ? plane - 1 : plane;
+            const solid = (a: number, b: number) => {
+              point[u] = i + a; point[v] = j + b;
+              const id = cell(point[0], point[1], point[2]);
+              return id && (materials[id].kind === SceneKind.Opaque || materials[id].kind === SceneKind.Cutout) ? 1 : 0;
+            };
+            for (let corner = 0; corner < 4; corner++) {
+              const a = corner === 1 || corner === 2 ? 1 : -1, b = corner >= 2 ? 1 : -1;
+              const sideA = solid(a, 0), sideB = solid(0, b), diagonal = solid(a, b);
+              ao |= (sideA && sideB ? 3 : sideA + sideB + diagonal) << (corner * 2);
+            }
+          }
+          mask[j * width + i] = current && !occludes(neighbor, current) ? current | (ao << 16) : 0;
+        }
+        for (let j = 0; j < tall && !limited; j++) for (let i = 0; i < width && !limited;) {
+          const value = mask[j * width + i];
+          if (!value) { i++; continue; }
+          const id = value & 65535, ao = value >>> 16, corners = [ao & 3, (ao >> 2) & 3, (ao >> 4) & 3, (ao >> 6) & 3];
+          let w = 1, h = 1;
+          if (corners[0] === corners[1] && corners[2] === corners[3]) while (i + w < width && mask[j * width + i + w] === value) w++;
+          outer: while (j + h < tall && corners[0] === corners[3] && corners[1] === corners[2]) {
+            for (let k = 0; k < w; k++) if (mask[(j + h) * width + i + k] !== value) break outer;
+            h++;
+          }
+          position[axis] = plane; position[u] = i; position[v] = j;
+          quad(position[0], position[1], position[2], w, h, axis * 2 + sign, id, ao);
+          for (let row = 0; row < h; row++) mask.fill(0, (j + row) * width + i, (j + row) * width + i + w);
+          i += w;
+        }
+      }
+      if (plane % 16 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  }
+  for (let y = 0; y < height && !limited; y++) {
+    for (let z = 0; z < SIZE && !limited; z++) for (let x = 0; x < SIZE && !limited; x++) {
+      const id = cell(x, y, z);
+      if (!id || materials[id].kind !== SceneKind.Plant) continue;
+      if (materials[id].model.shape === "ground") quad(x, y, z, 1, 1, 2, id);
+      else { quad(x, y, z, 1, 1, 6, id); quad(x, y, z, 1, 1, 7, id); }
+    }
+    if (y % 16 === 0) {
+      if (disposed()) throw new Error("MC_MAP_UNAVAILABLE");
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  }
+  return { version: 1, quads: bytes.subarray(0, count * 16).toString("base64"), heights: heights.toString("base64"), limited };
+}

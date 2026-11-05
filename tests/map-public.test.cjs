@@ -135,6 +135,27 @@ test("private link lookups retain login and instance permission checks, and expo
   assert.equal(f.calls.length, 0);
 });
 
+test("anonymous 3D scenes use only the configured save, validate scene coordinates and discard revoked in-flight geometry", async () => {
+  const f = routesFixture();
+  assert.equal((await f.request("/scene", { map: "survival", x: "0", z: "0" })).body.message, "MC_MAP_PAGE_DISABLED");
+  f.configure({ mapPageEnabled: true });
+  const scene = { version: 1, quads: "mesh", heights: "height", chunks: 4, warnings: 0, limited: false };
+  f.respond(async () => ({ ...scene, root: "/private/save", world: hiddenWorld }));
+  assert.deepEqual((await f.request("/scene", { map: "survival", x: "-937500", z: "0", y: "0", world: hiddenWorld, uuid: "other", daemonId: "other" })).body, scene);
+  assert.deepEqual(f.calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world, x: -937500, z: 0, y: 0 } });
+  assert.equal(f.checks.length, 0);
+  assert.equal((await f.request("/scene", { map: "unlisted", x: "0", z: "0" })).body.message, "MC_MAP_PUBLIC_NOT_FOUND");
+  for (const query of [{ x: "937501", z: "0" }, { x: "0", z: "0", y: "2048" }, { x: ["0"], z: "0" }]) {
+    assert.equal((await f.request("/scene", { map: "survival", ...query })).body.message, "MC_MAP_INVALID");
+  }
+  assert.equal(f.calls.length, 1);
+  const gate = deferred(); f.respond(() => gate.promise);
+  const pending = f.request("/scene", { map: "survival", x: "0", z: "0" });
+  await new Promise(resolve => setImmediate(resolve));
+  f.configure({ publicMaps: [] }); gate.resolve(scene);
+  assert.equal((await pending).body.message, "MC_MAP_PUBLIC_NOT_FOUND");
+});
+
 test("the host form and instance map editor serialize writes without overwriting each other's fields", async () => {
   const f = await configuration({ mapPageEnabled: true, publicMaps: [entry()] });
   const gate = deferred();

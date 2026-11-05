@@ -152,5 +152,14 @@
   "MC_MAP_CANCEL": "취소",
   "MC_MAP_CONTROLS": "지도 설정",
   "MC_MAP_CONTROLS_OPEN": "지도 설정 열기",
-  "MC_MAP_CONTROLS_CLOSE": "지도 설정 닫기"
+  "MC_MAP_CONTROLS_CLOSE": "지도 설정 닫기",
+  "MC_MAP_3D_ENTER": "3D 장면으로 전환",
+  "MC_MAP_3D_EXIT": "2D 지도로 전환",
+  "MC_MAP_3D_SCENE": "저장된 월드의 3D 장면",
+  "MC_MAP_3D_HINT": "드래그하여 회전하고, 오른쪽 버튼이나 두 손가락으로 이동하며, 휠이나 핀치로 확대/축소합니다. 방향키로도 이동할 수 있습니다.",
+  "MC_MAP_3D_SLICE_HINT": "3D 단면은 선택한 Y 높이 이하의 블록을 표시합니다. 슬라이더로 지형을 잘라 볼 수 있습니다.",
+  "MC_MAP_3D_LOADING": "3D 장면 불러오는 중…",
+  "MC_MAP_3D_EMPTY": "근처에 저장된 블록이 없습니다. 다른 좌표를 선택하거나 생성 지점으로 돌아가세요.",
+  "MC_MAP_WEBGL_UNAVAILABLE": "이 브라우저는 3D 장면을 표시할 수 없어 2D로 돌아왔습니다. 하드웨어 가속을 켜고 다시 시도하세요.",
+  "MC_MAP_SCENE_LIMIT": "장면이 복잡하여 가까운 지형을 우선 표시합니다. 확대하거나 이동하여 더 탐색하세요."
 }

@@ -152,5 +152,14 @@
   "MC_MAP_CANCEL": "Abbrechen",
   "MC_MAP_CONTROLS": "Karteneinstellungen",
   "MC_MAP_CONTROLS_OPEN": "Karteneinstellungen öffnen",
-  "MC_MAP_CONTROLS_CLOSE": "Karteneinstellungen schließen"
+  "MC_MAP_CONTROLS_CLOSE": "Karteneinstellungen schließen",
+  "MC_MAP_3D_ENTER": "Zur 3D-Szene wechseln",
+  "MC_MAP_3D_EXIT": "Zur 2D-Karte wechseln",
+  "MC_MAP_3D_SCENE": "3D-Szene der gespeicherten Welt",
+  "MC_MAP_3D_HINT": "Ziehen zum Drehen, mit rechter Maustaste oder zwei Fingern verschieben, mit Mausrad oder Pinch zoomen. Pfeiltasten verschieben ebenfalls.",
+  "MC_MAP_3D_SLICE_HINT": "Der 3D-Schnitt zeigt Blöcke auf und unter der gewählten Y-Ebene. Mit dem Regler das Gelände aufschneiden.",
+  "MC_MAP_3D_LOADING": "3D-Szene wird geladen…",
+  "MC_MAP_3D_EMPTY": "Keine gespeicherten Blöcke in der Nähe. Andere Koordinaten wählen oder zum Spawn zurückkehren.",
+  "MC_MAP_WEBGL_UNAVAILABLE": "Dieser Browser kann die 3D-Szene nicht darstellen. Zurück zu 2D; Hardwarebeschleunigung aktivieren und erneut versuchen.",
+  "MC_MAP_SCENE_LIMIT": "Diese Szene ist sehr komplex. Nahes Gelände hat Vorrang; zum Erkunden näher heranzoomen oder verschieben."
 }

@@ -1,4 +1,4 @@
-import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, mapCoordinate, mapHeight, parseMapSource, publicMapId, type MapTile, type MapWorld } from "../../../shared/map";
+import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight, parseMapSource, publicMapId, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import type { MapPanelContext } from "./index";
 import type { McToolsSettings } from "./settings";
 
@@ -25,9 +25,9 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
     if (!map) throw new Error("MC_MAP_PUBLIC_NOT_FOUND");
     return map;
   };
-  const integer = (value: unknown, height = false) => {
+  const integer = (value: unknown, parse: (value: number) => number | undefined = mapCoordinate) => {
     if (typeof value !== "string" || !/^-?\d{1,6}$/.test(value)) throw new Error("MC_MAP_INVALID");
-    return height ? mapHeight(Number(value))! : mapCoordinate(Number(value));
+    return parse(Number(value))!;
   };
 
   router.get("/maps", noStore, (request: any) => {
@@ -49,7 +49,7 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
       };
     });
 
-  for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT]]) {
+  for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT], ["/scene", MAP_SCENE_EVENT]]) {
     router.get(route, noStore, async (request: any) => {
       try {
         const map = configured(request.query.map);
@@ -57,9 +57,10 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         const node = ctx.remote.services.getInstance(source.daemonId);
         if (!node?.available) throw new Error("MC_MAP_NODE_OFFLINE");
         const data: Record<string, unknown> = { instanceUuid: source.instanceUuid };
-        if (event === MAP_TILE_EVENT) {
-          Object.assign(data, { world: source.world, x: integer(request.query.x), z: integer(request.query.z) });
-          if (request.query.y !== undefined) data.y = integer(request.query.y, true);
+        if (event !== MAP_WORLDS_EVENT) {
+          const coordinate = event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate;
+          Object.assign(data, { world: source.world, x: integer(request.query.x, coordinate), z: integer(request.query.z, coordinate) });
+          if (request.query.y !== undefined) data.y = integer(request.query.y, mapHeight);
         } else if (request.query.refresh === "1") {
           const key = source.daemonId + "/" + source.instanceUuid;
           const now = Date.now();
@@ -78,6 +79,9 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
           const world = (response as MapWorld[]).find((item) => item.id === source.world);
           if (!world) throw new Error("MC_MAP_WORLD_MISSING");
           request.body = [{ id: map.id, name: current.name, dimension: world.dimension, spawn: { x: world.spawn.x, z: world.spawn.z } }];
+        } else if (event === MAP_SCENE_EVENT) {
+          const scene = response as MapSceneTile;
+          request.body = { version: scene.version, quads: scene.quads, heights: scene.heights, chunks: scene.chunks, warnings: scene.warnings, limited: scene.limited };
         } else {
           const tile = response as MapTile;
           request.body = { image: tile.image, chunks: tile.chunks, warnings: tile.warnings };

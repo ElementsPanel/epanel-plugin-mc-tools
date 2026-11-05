@@ -1,6 +1,9 @@
 export const MAP_TILE_SIZE = 128;
 export const MAP_WORLDS_EVENT = "mc-tools/map/worlds";
 export const MAP_TILE_EVENT = "mc-tools/map/tile";
+export const MAP_SCENE_EVENT = "mc-tools/map/scene";
+export const MAP_SCENE_SIZE = 32;
+export const MAP_SCENE_MAX_QUADS = 65_536;
 export const MAP_LIMIT = 30_000_000;
 // Both save readers address sections with a signed byte (16 blocks per section).
 export const MAP_MIN_Y = -2048;
@@ -14,6 +17,7 @@ export interface MapViewOptions {
   z?: number;
   zoom?: number;
   y?: number;
+  render?: "3d";
 }
 
 export interface MapPageStatus { enabled: boolean }
@@ -58,6 +62,27 @@ export interface MapTile {
   image: string;
   chunks: number;
   warnings: number;
+}
+
+/** Local block geometry, independent of private world/instance identifiers. */
+export interface MapSceneTile {
+  version: 1;
+  // Each 16-byte quad: x:u8, z:u8, y:i16le, width:u16le, height:u16le,
+  // face:u8 (+X,-X,+Y,-Y,+Z,-Z,cross A,cross B), flags:u8, atlas sprite:u16le,
+  // biome tint RGB:u8[3], four corner occlusion values packed as u2[4].
+  quads: string;
+  // 32 × 32 surface heights, signed i16le; -32768 denotes an empty column.
+  heights: string;
+  chunks: number;
+  warnings: number;
+  limited: boolean;
+}
+
+export function mapSceneCoordinate(value: unknown) {
+  if (typeof value !== "number" || !Number.isInteger(value) || Math.abs(value) > Math.ceil(MAP_LIMIT / MAP_SCENE_SIZE)) {
+    throw new Error("MC_MAP_INVALID");
+  }
+  return value;
 }
 
 export function mapCoordinate(value: unknown) {

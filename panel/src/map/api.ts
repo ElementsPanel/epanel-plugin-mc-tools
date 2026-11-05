@@ -1,5 +1,5 @@
 import { ctx } from "@elements-panel/sdk";
-import type { MapInstances, MapNode, MapSettings, MapTile, MapWorld, PublicMapCatalog, PublicMapLinks } from "../../../shared/map";
+import type { MapInstances, MapNode, MapSettings, MapTile, MapSceneTile, MapWorld, PublicMapCatalog, PublicMapLinks } from "../../../shared/map";
 import { t } from "../settings";
 
 export function mapError(error: unknown): string {
@@ -45,6 +45,9 @@ export function worldMapApi(instanceUuid: string, daemonId: string) {
       if (refresh) api.reset();
       return api.request<MapWorld[]>("worlds", { ...scope, refresh: refresh ? "1" : "0" }, signal);
     },
+    scene: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => api.request<MapSceneTile>("scene", {
+      ...scope, world, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    }, signal),
     tile: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => api.request<MapTile>("tile", {
       ...scope, world, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
     }, signal)
@@ -78,6 +81,9 @@ export const publicMapCatalog = (signal: AbortSignal) => publicRequest<PublicMap
 export function publicWorldMapApi(map: string) {
   return {
     worlds: (signal: AbortSignal, refresh = false) => publicRequest<MapWorld[]>("worlds", { map, refresh: refresh ? "1" : "0" }, signal),
+    scene: (_world: string, x: number, z: number, signal: AbortSignal, y?: number) => publicRequest<MapSceneTile>("scene", {
+      map, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    }, signal),
     tile: (_world: string, x: number, z: number, signal: AbortSignal, y?: number) => publicRequest<MapTile>("tile", {
       map, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
     }, signal)

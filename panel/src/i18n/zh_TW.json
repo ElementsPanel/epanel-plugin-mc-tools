@@ -152,5 +152,14 @@
   "MC_MAP_CANCEL": "取消",
   "MC_MAP_CONTROLS": "地圖設定",
   "MC_MAP_CONTROLS_OPEN": "開啟地圖設定",
-  "MC_MAP_CONTROLS_CLOSE": "關閉地圖設定"
+  "MC_MAP_CONTROLS_CLOSE": "關閉地圖設定",
+  "MC_MAP_3D_ENTER": "切換為 3D 場景",
+  "MC_MAP_3D_EXIT": "切換為 2D 地圖",
+  "MC_MAP_3D_SCENE": "存檔 3D 場景",
+  "MC_MAP_3D_HINT": "拖曳旋轉視角，右鍵或雙指拖曳平移，滾輪或捏合縮放。方向鍵也可平移。",
+  "MC_MAP_3D_SLICE_HINT": "3D 切面顯示所選 Y 層及其下方的方塊，拖曳滑桿可切開地形。",
+  "MC_MAP_3D_LOADING": "正在載入 3D 場景…",
+  "MC_MAP_3D_EMPTY": "附近沒有已儲存的方塊，可更換座標或返回出生點。",
+  "MC_MAP_WEBGL_UNAVAILABLE": "目前瀏覽器無法執行 3D 場景，已切回 2D 地圖。請啟用硬體加速後重試。",
+  "MC_MAP_SCENE_LIMIT": "場景過於複雜，已優先顯示附近地形。可放大或移動後繼續查看。"
 }

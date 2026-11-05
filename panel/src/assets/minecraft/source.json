@@ -1,0 +1,9 @@
+{
+  "minecraftVersion": "26.2",
+  "jarSha256": "40896ee9f1e2bec3c934daac7e93d41e9e3d9c2f8ae0ca366d52ffbfd1afa290",
+  "atlasSha256": "3574b3a486c763e34709a0bc187ec8aca4b7cdf9c79b0a779e4837f5b2826685",
+  "textures": 932,
+  "frames": 1302,
+  "blocks": 1198,
+  "variants": 8
+}

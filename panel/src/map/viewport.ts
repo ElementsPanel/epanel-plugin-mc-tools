@@ -1,7 +1,15 @@
 import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld } from "../../../shared/map";
 
 export interface Camera { x: number; z: number; zoom: number }
-export interface MapViewState { x: number; z: number; zoom: number; loading: number; warnings: number; error?: unknown }
+export interface MapViewState { x: number; z: number; zoom: number; loading: number; warnings: number; error?: unknown; limited?: boolean; empty?: boolean }
+export interface MapRenderer {
+  readonly camera: Camera;
+  center(x: number, z: number): void;
+  zoom(factor: number): void;
+  setLayer(y?: number): void;
+  dispose(): void;
+}
+export const loadSceneViewport = () => import("./scene-viewport");
 interface Tile { image: HTMLImageElement; warnings: number; position: string; y?: number; appearedAt?: number }
 interface DisplayTile { tile: Tile; previous?: Tile; startedAt: number; duration: number }
 interface ZoomAnimation { from: number; to: number; x: number; y: number; startedAt: number }

@@ -152,5 +152,14 @@
   "MC_MAP_CANCEL": "Cancel",
   "MC_MAP_CONTROLS": "Map settings",
   "MC_MAP_CONTROLS_OPEN": "Open map settings",
-  "MC_MAP_CONTROLS_CLOSE": "Close map settings"
+  "MC_MAP_CONTROLS_CLOSE": "Close map settings",
+  "MC_MAP_3D_ENTER": "Switch to the 3D scene",
+  "MC_MAP_3D_EXIT": "Switch to the 2D map",
+  "MC_MAP_3D_SCENE": "Saved world 3D scene",
+  "MC_MAP_3D_HINT": "Drag to orbit, right-drag or drag with two fingers to pan, and scroll or pinch to zoom. Arrow keys also pan.",
+  "MC_MAP_3D_SLICE_HINT": "The 3D cutaway shows blocks at and below the selected Y level. Drag the slider to cut through terrain.",
+  "MC_MAP_3D_LOADING": "Loading the 3D scene…",
+  "MC_MAP_3D_EMPTY": "No saved blocks nearby. Choose other coordinates or return to spawn.",
+  "MC_MAP_WEBGL_UNAVAILABLE": "This browser cannot render the 3D scene. Returned to 2D; enable hardware acceleration and try again.",
+  "MC_MAP_SCENE_LIMIT": "This scene is very complex. Nearby terrain takes priority; zoom in or move to explore further."
 }

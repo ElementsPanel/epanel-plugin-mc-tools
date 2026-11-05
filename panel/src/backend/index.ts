@@ -1,5 +1,5 @@
 import type { Context } from "cordis";
-import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, mapCoordinate, mapHeight } from "../../../shared/map";
+import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight } from "../../../shared/map";
 import { registerPlayerRoutes } from "./players";
 import { registerMapSettings, type MapSettingsContext } from "./settings";
 import { localeMessages } from "../i18n";
@@ -34,7 +34,7 @@ export async function apply(ctx: PublicMapContext & MapEditorContext & MapSettin
 export function registerWorldMapRoutes(ctx: MapPanelContext) {
   const router = ctx.koa.router("/api/mc-tools/map");
   const { permission, validator, instanceAccess } = ctx.middleware;
-  for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT]]) {
+  for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT], ["/scene", MAP_SCENE_EVENT]]) {
     router.get(route,
       permission({ level: ctx.roles.USER, speedLimit: false }),
       validator({ query: { uuid: String, daemonId: String } }),
@@ -44,11 +44,11 @@ export function registerWorldMapRoutes(ctx: MapPanelContext) {
           const node = ctx.remote.services.getInstance(String(request.query.daemonId));
           if (!node?.available) throw new Error("MC_MAP_NODE_OFFLINE");
           const data: Record<string, unknown> = { instanceUuid: String(request.query.uuid) };
-          if (event === MAP_TILE_EVENT) {
+          if (event !== MAP_WORLDS_EVENT) {
             if (typeof request.query.world !== "string" || !/^[a-f0-9]{24}$/.test(request.query.world)) throw new Error("MC_MAP_INVALID");
             const coordinate = (value: unknown) => {
               if (typeof value !== "string" || !/^-?\d{1,6}$/.test(value)) throw new Error("MC_MAP_INVALID");
-              return mapCoordinate(Number(value));
+              return (event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate)(Number(value));
             };
             Object.assign(data, { world: request.query.world, x: coordinate(request.query.x), z: coordinate(request.query.z) });
             if (request.query.y !== undefined) {

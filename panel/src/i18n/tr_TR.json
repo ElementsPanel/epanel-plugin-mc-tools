@@ -152,5 +152,14 @@
   "MC_MAP_CANCEL": "İptal",
   "MC_MAP_CONTROLS": "Harita ayarları",
   "MC_MAP_CONTROLS_OPEN": "Harita ayarlarını aç",
-  "MC_MAP_CONTROLS_CLOSE": "Harita ayarlarını kapat"
+  "MC_MAP_CONTROLS_CLOSE": "Harita ayarlarını kapat",
+  "MC_MAP_3D_ENTER": "3D sahneye geç",
+  "MC_MAP_3D_EXIT": "2D haritaya geç",
+  "MC_MAP_3D_SCENE": "Kayıtlı dünyanın 3D sahnesi",
+  "MC_MAP_3D_HINT": "Döndürmek için sürükleyin, kaydırmak için sağ tuşla veya iki parmakla sürükleyin, yakınlaştırmak için tekerleği veya kıstırma hareketini kullanın. Ok tuşları da kaydırır.",
+  "MC_MAP_3D_SLICE_HINT": "3D kesit, seçilen Y seviyesindeki ve altındaki blokları gösterir. Araziyi kesmek için kaydırıcıyı sürükleyin.",
+  "MC_MAP_3D_LOADING": "3D sahne yükleniyor…",
+  "MC_MAP_3D_EMPTY": "Yakında kayıtlı blok yok. Başka koordinatlar seçin veya doğma noktasına dönün.",
+  "MC_MAP_WEBGL_UNAVAILABLE": "Bu tarayıcı 3D sahneyi gösteremediği için 2D’ye dönüldü. Donanım hızlandırmayı açıp yeniden deneyin.",
+  "MC_MAP_SCENE_LIMIT": "Bu sahne çok karmaşık. Yakındaki araziye öncelik verilir; daha fazlasını keşfetmek için yakınlaştırın veya kaydırın."
 }
