@@ -25,5 +25,4 @@ defineExpose({ open: () => { visible.value = true; } });
 
 <style scoped>
 .mc-map-dialog-content { height: min(72dvh, 790px); min-height: 0; overflow-y: auto; }
-.mc-map-dialog-content :deep(.mc-map-toolbar) { padding: 8px 0 12px; }
 </style>

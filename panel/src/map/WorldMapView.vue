@@ -211,18 +211,16 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-range, .mc-map-layer-slider :deep(.v-input__prepend), .mc-map-layer-slider :deep(.v-input__append) { display: none; }
 .mc-map-height { flex: 0 0 76px; }
 .mc-map-layer-hint { margin: -4px 12px 12px; font-size: 12px; opacity: 0.75; }
-.mc-map-surface { position: relative; flex: 1; min-height: 280px; background: #19252a; border-radius: 16px; overflow: hidden; }
+.mc-map-surface { position: relative; flex: 1; min-height: 280px; background: #19252a; overflow: hidden; }
 .mc-map-surface canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; cursor: grab; touch-action: none; }
 .mc-map-progress { position: absolute; inset: 0 0 auto; z-index: 2; }
 .mc-map-notice { position: absolute; top: 12px; left: 72px; right: 12px; z-index: 3; max-width: 620px; }
 .mc-map-empty { display: grid; place-items: center; height: 100%; min-height: 280px; color: #dbe5e5; padding: 24px; text-align: center; }
-.mc-map-position { position: absolute; border-radius: 6px; padding: 5px 9px; pointer-events: none; }
-.mc-map-position { left: 12px; bottom: 12px; max-width: calc(100% - 84px); font-size: 12px; font-variant-numeric: tabular-nums; }
-.mc-map-zoom { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 4px; padding: 4px; border-radius: 6px; }
+.mc-map-position { position: absolute; border-radius: 0 24px 0 0; padding: 12px 20px; pointer-events: none; }
+.mc-map-position { left: 0; bottom: 0; max-width: calc(100% - 80px); font-size: 12px; font-variant-numeric: tabular-nums; }
+.mc-map-zoom { position: absolute; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 24px 0 0 0; overflow: hidden; }
 .mc-map-position, .mc-map-zoom { color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
 .mc-map-zoom :deep(.v-btn) { color: inherit; }
 .mc-world-map-fullscreen { position: absolute; inset: 0; min-height: 0; }
-.mc-world-map-fullscreen .mc-map-surface { position: absolute; inset: 0; min-height: 0; border-radius: 0; }
-.mc-world-map-fullscreen .mc-map-position { left: 16px; bottom: 16px; }
-.mc-world-map-fullscreen .mc-map-zoom { right: 16px; bottom: 16px; }
+.mc-world-map-fullscreen .mc-map-surface { position: absolute; inset: 0; min-height: 0; }
 </style>

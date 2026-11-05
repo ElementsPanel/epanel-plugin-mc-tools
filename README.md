@@ -22,7 +22,9 @@ Open **存档地图 / Saved World Map** in the instance console's function group
 view saved terrain in a popup. Desktop mode opens a managed map window. The
 button at the top left opens the map settings sidebar, which starts closed in
 both the console and public map. Choose the current world/dimension, coordinates,
-view mode and height there. Close it with its close button or Escape. Drag to
+view mode and height there. It uses the same temporary drawer style as the AI
+sidebar: full height, square corners, a fixed header and a scrollable body. Click
+the backdrop, use its close button or press Escape to close it. Drag to
 pan, scroll or use the buttons to zoom, choose a world/dimension, enter X/Z to
 jump, or return to spawn. The gold marker shows spawn; checkerboard areas have
 no readable saved terrain. Use **Refresh** after saving changes on the server.

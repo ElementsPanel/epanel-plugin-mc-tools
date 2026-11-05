@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { VBtn } from "vuetify/components";
+import { VBtn, VCard, VLayout, VNavigationDrawer } from "vuetify/components";
 import { t } from "../settings";
 
 const props = withDefaults(defineProps<{ open?: boolean }>(), { open: undefined });
@@ -20,27 +20,28 @@ async function toggle(value: boolean) {
 
 <template>
   <div ref="controls" class="mc-map-ui">
-    <VBtn v-if="!opened" icon="mdi-menu" class="mc-map-menu" :title="t('MC_MAP_CONTROLS_OPEN')" :aria-label="t('MC_MAP_CONTROLS_OPEN')" :aria-expanded="opened" :aria-controls="panelId" @click="toggle(true)" />
-    <Transition name="mc-map-sidebar">
-      <aside v-if="opened" :id="panelId" class="mc-map-sidebar" :aria-label="t('MC_MAP_CONTROLS')" @keydown.esc.stop.prevent="toggle(false)">
-        <header class="mc-map-sidebar-header">
-          <h2>{{ t("MC_MAP_CONTROLS") }}</h2>
-          <VBtn icon="mdi-close" class="mc-map-sidebar-close" variant="text" size="small" :title="t('MC_MAP_CONTROLS_CLOSE')" :aria-label="t('MC_MAP_CONTROLS_CLOSE')" @click="toggle(false)" />
-        </header>
-        <div class="mc-map-sidebar-content"><slot /></div>
-      </aside>
-    </Transition>
+    <VBtn v-if="!opened" icon="mdi-menu" class="mc-map-menu" :width="60" :height="60" :title="t('MC_MAP_CONTROLS_OPEN')" :aria-label="t('MC_MAP_CONTROLS_OPEN')" :aria-expanded="opened" :aria-controls="panelId" @click="toggle(true)" />
+    <VLayout class="mc-map-drawer-layout">
+      <VNavigationDrawer :id="panelId" :model-value="opened" class="mc-map-sidebar" location="left" :width="480" rounded="0" absolute temporary floating disable-route-watcher disable-resize-watcher touchless retain-focus capture-focus tag="aside" :aria-label="t('MC_MAP_CONTROLS')" @update:model-value="toggle" @keydown.esc.stop.prevent="toggle(false)">
+        <VCard :title="t('MC_MAP_CONTROLS')" class="mc-map-sidebar-card" rounded="0">
+          <template #append>
+            <VBtn icon="mdi-close" class="mc-map-sidebar-close" variant="text" size="small" :title="t('MC_MAP_CONTROLS_CLOSE')" :aria-label="t('MC_MAP_CONTROLS_CLOSE')" @click="toggle(false)" />
+          </template>
+          <div class="mc-map-sidebar-content"><slot /></div>
+        </VCard>
+      </VNavigationDrawer>
+    </VLayout>
   </div>
 </template>
 
 <style scoped>
 .mc-map-ui { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
-.mc-map-menu { position: absolute; top: 12px; left: 12px; pointer-events: auto; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
-.mc-map-sidebar { position: absolute; inset: 12px auto 12px 12px; width: min(420px, calc(100% - 24px)); display: flex; flex-direction: column; pointer-events: auto; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); border-radius: 16px; box-shadow: 0 4px 28px #0004; backdrop-filter: blur(12px); overflow: hidden; }
-.mc-map-sidebar-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 16px; border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1); }
-.mc-map-sidebar-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.mc-map-menu { position: absolute; top: 0; left: 0; padding: 12px; border-radius: 0 0 24px 0; pointer-events: auto; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
+.mc-map-drawer-layout { width: 100%; height: 100%; }
+.mc-map-drawer-layout :deep(.v-navigation-drawer__scrim) { pointer-events: auto; }
+.mc-map-sidebar :deep(.v-navigation-drawer__content) { overflow: hidden; }
+.mc-map-sidebar-card { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.mc-map-sidebar-card > :deep(.v-card-item) { flex: 0 0 auto; min-height: 60px; padding: 10px 16px; }
+.mc-map-sidebar-card > :deep(.v-card-item .v-card-title) { font-size: 15px; font-weight: 600; }
 .mc-map-sidebar-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 0; }
-.mc-map-sidebar-enter-active, .mc-map-sidebar-leave-active { transition: transform 160ms ease, opacity 160ms ease; }
-.mc-map-sidebar-enter-from, .mc-map-sidebar-leave-to { transform: translateX(-16px); opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .mc-map-sidebar-enter-active, .mc-map-sidebar-leave-active { transition: none; } }
 </style>
