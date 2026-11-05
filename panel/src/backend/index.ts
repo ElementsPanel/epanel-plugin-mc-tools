@@ -1,9 +1,13 @@
 import type { Context } from "cordis";
 import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, mapCoordinate, mapHeight } from "../../../shared/map";
 import { registerPlayerRoutes } from "./players";
+import { registerMapSettings, type MapSettingsContext } from "./settings";
+import { localeMessages } from "../i18n";
+import { registerPublicMapRoutes, type PublicMapContext } from "./public-map";
+import { registerMapEditorRoutes, type MapEditorContext } from "./map-settings";
 
 export interface MapPanelContext extends Context {
-  koa: { router(prefix: string): { get(path: string, ...handlers: any[]): void; post(path: string, ...handlers: any[]): void } };
+  koa: { router(prefix: string): { get(path: string, ...handlers: any[]): void; post(path: string, ...handlers: any[]): void; put(path: string, ...handlers: any[]): void } };
   roles: { USER: number };
   middleware: {
     permission(options: { level: number; speedLimit: boolean }): any;
@@ -16,10 +20,14 @@ export interface MapPanelContext extends Context {
   };
 }
 
-export const inject = ["koa", "middleware", "roles", "remote"];
+export const inject = ["koa", "middleware", "roles", "remote", "i18n", "storage", "settingsForm", "identity"];
 
-export function apply(ctx: MapPanelContext) {
+export async function apply(ctx: PublicMapContext & MapEditorContext & MapSettingsContext & { i18n: { define(messages: typeof localeMessages): unknown } }) {
+  ctx.i18n.define(localeMessages);
+  const settings = await registerMapSettings(ctx);
   registerWorldMapRoutes(ctx);
+  registerPublicMapRoutes(ctx, settings.read);
+  registerMapEditorRoutes(ctx, settings);
   registerPlayerRoutes(ctx);
 }
 

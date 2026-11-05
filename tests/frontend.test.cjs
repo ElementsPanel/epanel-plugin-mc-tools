@@ -9,6 +9,7 @@ test("Minecraft settings appear in both interfaces only for a scoped Minecraft i
   const actions = [];
   let locales;
   const ctx = {
+    routes: { add() {} },
     i18n: { define(value) { locales = value; }, translate: (key) => key },
     actions: { instances: actions, instance(action) { actions.push(action); } }
   };
@@ -36,6 +37,7 @@ test("Minecraft settings appear in both interfaces only for a scoped Minecraft i
 test("saved map action supports both editions, requires node support, and registers alongside a legacy status action", () => {
   const actions = [{ id: "mcstats" }];
   const ctx = {
+    routes: { add() {} },
     i18n: { define() {}, translate: (key) => key },
     actions: { instances: actions, instance(action) { actions.push(action); } }
   };

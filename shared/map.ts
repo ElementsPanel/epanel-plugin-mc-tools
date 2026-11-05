@@ -5,6 +5,47 @@ export const MAP_LIMIT = 30_000_000;
 // Both save readers address sections with a signed byte (16 blocks per section).
 export const MAP_MIN_Y = -2048;
 export const MAP_MAX_Y = 2047;
+export const MAP_PAGE_PATH = "/mc-tools/map";
+export const MAP_SETTINGS_PATH = "/mc-tools/map/settings";
+
+export interface MapViewOptions {
+  world?: string;
+  x?: number;
+  z?: number;
+  zoom?: number;
+  y?: number;
+}
+
+export interface MapPageStatus { enabled: boolean }
+export interface PublicMap { id: string; name: string }
+export interface PublicMapSetting extends PublicMap { source: string }
+export interface MapSettings { mapPageEnabled: boolean; publicMaps: PublicMapSetting[] }
+export interface MapNode { id: string; name: string; available: boolean }
+export interface MapInstance { id: string; name: string }
+export interface MapInstances { page: number; maxPage: number; data: MapInstance[]; selected?: MapInstance }
+export interface PublicMapCatalog extends MapPageStatus { maps: PublicMap[] }
+export interface PublicMapLinks extends MapPageStatus {
+  canConfigure: boolean;
+  maps: (PublicMap & { world: string })[];
+}
+
+export function mapSource(daemonId: string, instanceUuid: string, world: string) {
+  return `${daemonId}/${instanceUuid}/${world}`;
+}
+
+export function parseMapSource(value: unknown) {
+  if (typeof value !== "string") throw new Error("MC_MAP_PAGE_SETTINGS_INVALID");
+  const parts = value.trim().split("/");
+  if (parts.length !== 3 || !/^[\w-]{1,128}$/.test(parts[0]) || !/^[\w-]{1,128}$/.test(parts[1]) || !/^[a-f0-9]{24}$/.test(parts[2])) {
+    throw new Error("MC_MAP_PAGE_SETTINGS_INVALID");
+  }
+  return { daemonId: parts[0], instanceUuid: parts[1], world: parts[2] };
+}
+
+export function publicMapId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(value)) throw new Error("MC_MAP_INVALID");
+  return value;
+}
 
 export interface MapWorld {
   id: string;

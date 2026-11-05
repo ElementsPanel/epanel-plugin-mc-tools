@@ -19,7 +19,10 @@ instance configuration API. It has no runtime imports from the source checkout.
 Translations for all 12 panel languages are included.
 
 Open **存档地图 / Saved World Map** in the instance console's function group to
-view saved terrain in a popup. Desktop mode opens a managed map window. Drag to
+view saved terrain in a popup. Desktop mode opens a managed map window. The
+button at the top left opens the map settings sidebar, which starts closed in
+both the console and public map. Choose the current world/dimension, coordinates,
+view mode and height there. Close it with its close button or Escape. Drag to
 pan, scroll or use the buttons to zoom, choose a world/dimension, enter X/Z to
 jump, or return to spawn. The gold marker shows spawn; checkerboard areas have
 no readable saved terrain. Use **Refresh** after saving changes on the server.
@@ -72,10 +75,39 @@ during copying, snapshot creation retries and reports an error if it cannot
 obtain a consistent file set.
 
 Both panel and daemon must have this plugin enabled for the map action to
-appear. Map API calls require a logged-in user with access to the selected
+appear. The instance map and its private API require a logged-in user with access to the selected
 instance. Paths are resolved inside the instance directory; world IDs returned
 to the browser contain no filesystem paths. Reading does not issue server
 commands or modify the save. Large Bedrock snapshots can take longer to load.
+
+To offer a standalone map without requiring visitors to log in, open the panel's
+**插件配置 / Plugin Configuration**, select **mc-tools**, and open
+**添加/管理实例地图 / Add / manage instance maps**. Add a map by selecting its
+node, Minecraft instance, and saved world/dimension. Instance names can be searched
+and paginated. Give each map a public display name and, optionally, a stable URL
+alias. An empty alias is generated when saving. Additions and edits stay as drafts
+until **保存配置 / Save settings** is clicked. Turn on **启用存档地图公开页面 / Enable
+the public saved-world map page** in either the plugin configuration or this map
+management page and save.
+
+The public page fills the screen with the map. Its map selector, coordinate controls,
+layer slider and view link are inside the same floating sidebar used by the console
+map, including on mobile screens. Both map views omit the direction indicator.
+The catalogue is available at `https://your-panel/#/mc-tools/map`, or under
+the panel's existing base path. A single map can be opened with
+`#/mc-tools/map?map=alias`. **当前视图链接 / Link to this view** retains the map's
+position, zoom and horizontal slice, including Y=0 and negative heights. The
+instance map also shows a standalone-page link for worlds that have been opened
+to the public, and administrators can open map management directly from it.
+
+Public access defaults to disabled with no maps selected. Only the explicitly
+listed saves/dimensions are exposed; selecting an instance does not automatically
+publish its other worlds. Public links and map responses contain no private node,
+instance or world identifiers. Configuration and map selection require an
+administrator. Saving a removal or disabling public access stops subsequent and
+in-flight map responses; images already downloaded by visitors cannot be recalled.
+Visitors may refresh saved terrain, with forced snapshot refresh limited to once
+per instance every 30 seconds. Normal private map refresh remains available.
 
 Open **玩家管理 / Player Management** in the instance console's function group
 to view online and known players, search by name/UUID/XUID, and filter allowlists,

@@ -6,11 +6,26 @@ import WorldMapDialog from "./map/WorldMapDialog.vue";
 import WorldMapView from "./map/WorldMapView.vue";
 import PlayersDialog from "./players/PlayersDialog.vue";
 import PlayersView from "./players/PlayersView.vue";
+import WorldMapPage from "./map/WorldMapPage.vue";
+import MapSettingsPage from "./map/MapSettingsPage.vue";
+import { MAP_PAGE_PATH, MAP_SETTINGS_PATH } from "../../shared/map";
 
-export const inject = ["console", "i18n", "actions", "instance"];
+export const inject = ["console", "i18n", "actions", "instance", "routes"];
 
 export function apply(ctx: PanelFrontendPluginContext) {
   ctx.i18n.define(localeMessages);
+  ctx.routes.add({
+    path: MAP_PAGE_PATH,
+    name: "mc-tools-public-map",
+    component: WorldMapPage,
+    meta: { public: true, immersive: true, mainMenu: false }
+  });
+  ctx.routes.add({
+    path: MAP_SETTINGS_PATH,
+    name: "mc-tools-map-settings",
+    component: MapSettingsPage,
+    meta: { permission: 10, mainMenu: false }
+  });
   // Older instance packages already contribute the same action.
   if (!ctx.actions.instances.some((action) => action.id === "mcstats")) ctx.actions.instance({
     id: "mcstats",

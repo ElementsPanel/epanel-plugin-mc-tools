@@ -5,7 +5,7 @@ const { loader, deferred } = require("./helpers.cjs");
 
 test("player action registers once in both console interfaces and requires an eligible instance and daemon feature", () => {
   const actions = [];
-  const ctx = { i18n: { define() {}, translate: key => key }, actions: { instances: actions, instance: action => actions.push(action) } };
+  const ctx = { routes: { add() {} }, i18n: { define() {}, translate: key => key }, actions: { instances: actions, instance: action => actions.push(action) } };
   const { apply } = loader()("panel/src/frontend.ts");
   apply(ctx); apply(ctx);
   assert.equal(actions.filter(action => action.id === "mc-players").length, 1);

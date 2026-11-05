@@ -280,8 +280,9 @@ function mapComponent(overrides) {
   const mod = new Module(filename, module);
   mod.require = (id) => {
     if (Object.hasOwn(overrides, id)) return overrides[id];
-    if (id === "vuetify/components") return {};
+    if (id === "vuetify/components" || id.endsWith(".vue")) return {};
     if (id === "../../../shared/map") return loader()("shared/map.ts");
+    if (id === "./page") return loader()("panel/src/map/page.ts");
     return require(id);
   };
   mod._compile(transformSync(script.content, { loader: "ts", format: "cjs" }).code, filename);
