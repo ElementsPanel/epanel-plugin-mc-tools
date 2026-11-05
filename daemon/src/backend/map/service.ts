@@ -3,7 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip, inflate } from "node:zlib";
 import { parseUncompressed, simplify } from "prismarine-nbt";
-import { MAP_TILE_SIZE, mapCoordinate, type MapTile } from "../../../../shared/map";
+import { MAP_TILE_SIZE, mapCoordinate, mapHeight, type MapTile } from "../../../../shared/map";
 import { discoverWorlds, readSmall, safePath, type SavedWorld } from "./worlds";
 import { chunkSurface } from "./chunk";
 import { encodePng } from "./png";
@@ -60,15 +60,16 @@ export class WorldMapService {
     return worlds;
   }
 
-  async tile(instanceUuid: string, worldId: string, x: number, z: number) {
+  async tile(instanceUuid: string, worldId: string, x: number, z: number, y?: number) {
     mapCoordinate(x);
     mapCoordinate(z);
+    mapHeight(y);
     const world = (await this.worlds(instanceUuid)).find((item) => item.id === worldId);
     if (!world) throw new Error("MC_MAP_WORLD_MISSING");
-    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":" + x + ":" + z;
+    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":" + (y ?? "surface") + ":" + x + ":" + z;
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const task = this.limited(() => this.render(world, key, x, z));
+    const task = this.limited(() => this.render(world, key, x, z, y));
     this.pending.set(key, task);
     try { return await task; }
     finally { this.pending.delete(key); }
@@ -99,8 +100,8 @@ export class WorldMapService {
     }
   }
 
-  private async render(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapTile> {
-    if (world.edition === "bedrock") return this.renderBedrock(world, key, tileX, tileZ);
+  private async render(world: SavedWorld, key: string, tileX: number, tileZ: number, sliceY?: number): Promise<MapTile> {
+    if (world.edition === "bedrock") return this.renderBedrock(world, key, tileX, tileZ, sliceY);
     const groups = new Map<string, { x: number; z: number }[]>();
     const firstX = tileX * 8, firstZ = tileZ * 8;
     for (let z = firstZ; z < firstZ + 8; z++) for (let x = firstX; x < firstX + 8; x++) {
@@ -158,7 +159,7 @@ export class WorldMapService {
             else if (type === 2) data = await unzlib(data, { maxOutputLength: MAX_CHUNK });
             else if (type !== 3) throw new Error("MC_MAP_COMPRESSION");
             const nbt = simplify(parseUncompressed(data));
-            const surface = chunkSurface(nbt, world.dimension === "minecraft:the_nether");
+            const surface = chunkSurface(nbt, world.dimension === "minecraft:the_nether", sliceY);
             for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
               const target = ((position.z - firstZ) * 16 + z) * MAP_TILE_SIZE + (position.x - firstX) * 16 + x;
               colors[target] = surface.colors[z * 16 + x];
@@ -173,7 +174,7 @@ export class WorldMapService {
     return this.finish(key, stamp, colors, heights, chunks, warnings);
   }
 
-  private async renderBedrock(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapTile> {
+  private async renderBedrock(world: SavedWorld, key: string, tileX: number, tileZ: number, sliceY?: number): Promise<MapTile> {
     return this.snapshots.use(world, async (db, stamp) => {
       const cached = this.cache.get(key);
       if (cached?.stamp === stamp) {
@@ -187,7 +188,7 @@ export class WorldMapService {
       for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) {
         if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
         let surface;
-        try { surface = await bedrockSurface(db, tileX * 8 + x, tileZ * 8 + z, world.dimensionId!); }
+        try { surface = await bedrockSurface(db, tileX * 8 + x, tileZ * 8 + z, world.dimensionId!, sliceY); }
         catch (error) {
           if (!(error instanceof Error) || error.message !== "MC_MAP_CORRUPT") throw error;
           warnings++;

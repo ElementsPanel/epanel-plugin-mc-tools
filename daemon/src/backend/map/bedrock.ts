@@ -66,9 +66,12 @@ export function bedrockLayer(data: Buffer, y: number): BlockLayer {
   } };
 }
 
-export async function bedrockSurface(db: LevelDB, x: number, z: number, dimension: number) {
+export async function bedrockSurface(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {
   const prefix = bedrockKey(x, z, dimension, 47);
-  const iterator = db.getIterator({ gte: prefix, lt: bedrockKey(x, z, dimension, 48), limit: 257, fillCache: false });
+  const key = sliceY === undefined ? undefined : bedrockKey(x, z, dimension, 47, Math.floor(sliceY / 16));
+  const iterator = db.getIterator(key
+    ? { gte: key, lte: key, limit: 1, fillCache: false }
+    : { gte: prefix, lt: bedrockKey(x, z, dimension, 48), limit: 257, fillCache: false });
   const layers: BlockLayer[] = [];
   let warnings = 0, found = false;
   try {
@@ -84,5 +87,5 @@ export async function bedrockSurface(db: LevelDB, x: number, z: number, dimensio
   } finally { await iterator.end(); }
   if (!found) return undefined;
   layers.sort((a, b) => b.y - a.y);
-  return { ...surfaceFromLayers(layers, dimension === 1), warnings };
+  return { ...surfaceFromLayers(layers, dimension === 1, sliceY), warnings };
 }

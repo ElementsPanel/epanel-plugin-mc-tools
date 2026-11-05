@@ -1,13 +1,16 @@
-import { MAP_LIMIT, MAP_TILE_SIZE, type MapTile, type MapWorld } from "../../../shared/map";
+import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld } from "../../../shared/map";
 
 export interface Camera { x: number; z: number; zoom: number }
 export interface MapViewState { x: number; z: number; zoom: number; loading: number; warnings: number; error?: unknown }
-interface Tile { image: HTMLImageElement; warnings: number; appearedAt?: number }
+interface Tile { image: HTMLImageElement; warnings: number; position: string; y?: number; appearedAt?: number }
+interface DisplayTile { tile: Tile; previous?: Tile; startedAt: number; duration: number }
 interface ZoomAnimation { from: number; to: number; x: number; y: number; startedAt: number }
 
 const TILE_FADE_DURATION = 240;
+const LAYER_FADE_DURATION = 100;
 const ZOOM_DURATION = 200;
 const easeOut = (progress: number) => 1 - Math.pow(1 - progress, 3);
+const tileKey = (position: string, y?: number) => `${y ?? "surface"}:${position}`;
 
 export function worldPosition(camera: Camera, width: number, height: number, x: number, y: number) {
   return { x: camera.x + (x - width / 2) / camera.zoom, z: camera.z + (y - height / 2) / camera.zoom };
@@ -36,8 +39,10 @@ export class MapViewport {
   private readonly cache = new Map<string, Tile>();
   private readonly pending = new Set<string>();
   private readonly failed = new Set<string>();
+  private readonly displayed = new Map<string, DisplayTile>();
   private visible = new Set<string>();
   private readonly abort = new AbortController();
+  private blendCanvas?: HTMLCanvasElement | OffscreenCanvas;
   private readonly observer: ResizeObserver;
   private world: MapWorld;
   private width = 1;
@@ -52,9 +57,11 @@ export class MapViewport {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     world: MapWorld,
-    private readonly load: (world: string, x: number, z: number, signal: AbortSignal) => Promise<MapTile>,
-    private readonly changed: (state: MapViewState) => void
+    private readonly load: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapTile>,
+    private readonly changed: (state: MapViewState) => void,
+    private sliceY?: number
   ) {
+    mapHeight(sliceY);
     this.world = world;
     this.camera.x = world.spawn.x;
     this.camera.z = world.spawn.z;
@@ -79,6 +86,15 @@ export class MapViewport {
     this.animateZoom(factor, this.width / 2, this.height / 2);
   }
 
+  setLayer(y?: number) {
+    mapHeight(y);
+    if (this.abort.signal.aborted || this.sliceY === y) return;
+    this.sliceY = y;
+    this.failed.clear();
+    this.error = undefined;
+    this.schedule();
+  }
+
   dispose() {
     this.abort.abort();
     this.observer.disconnect();
@@ -89,6 +105,8 @@ export class MapViewport {
       this.canvas.removeEventListener(name, callback as EventListener);
     }
     this.cache.clear();
+    this.displayed.clear();
+    this.blendCanvas = undefined;
   }
 
   private resize() {
@@ -167,6 +185,38 @@ export class MapViewport {
     this.animateZoom(Math.exp(-Math.max(-1000, Math.min(1000, delta)) * 0.002), event.clientX - bounds.left, event.clientY - bounds.top);
   };
 
+  private nearestTile(position: string, previous?: Tile) {
+    const exact = this.cache.get(tileKey(position, this.sliceY));
+    if (exact || this.sliceY === undefined) return exact;
+    let closest = previous?.y === undefined ? undefined : previous;
+    let distance = closest ? Math.abs(closest.y! - this.sliceY) : Infinity;
+    for (const tile of this.cache.values()) {
+      if (tile.position !== position || tile.y === undefined) continue;
+      const delta = Math.abs(tile.y - this.sliceY);
+      if (delta < distance) { closest = tile; distance = delta; }
+    }
+    return closest;
+  }
+
+  private blend(previous: Tile, tile: Tile, progress: number): CanvasImageSource {
+    if (!this.blendCanvas) {
+      this.blendCanvas = typeof OffscreenCanvas === "function"
+        ? new OffscreenCanvas(MAP_TILE_SIZE, MAP_TILE_SIZE) : this.canvas.ownerDocument.createElement("canvas");
+      this.blendCanvas.width = this.blendCanvas.height = MAP_TILE_SIZE;
+    }
+    const context = this.blendCanvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+    if (!context) return tile.image;
+    context.clearRect(0, 0, MAP_TILE_SIZE, MAP_TILE_SIZE);
+    context.globalCompositeOperation = "source-over";
+    context.globalAlpha = 1 - progress;
+    context.drawImage(previous.image, 0, 0);
+    // Blend premultiplied pixels so air fades out and opaque terrain does not darken.
+    context.globalCompositeOperation = "lighter";
+    context.globalAlpha = progress;
+    context.drawImage(tile.image, 0, 0);
+    return this.blendCanvas;
+  }
+
   private draw(time = performance.now()) {
     let animating = this.advanceZoom(time);
     const context = this.canvas.getContext("2d");
@@ -180,21 +230,37 @@ export class MapViewport {
     context.fillStyle = "#213035";
     for (let z = 0; z < this.height; z += 32) for (let x = 0; x < this.width; x += 32) if ((x / 32 + z / 32) % 2) context.fillRect(x, z, 32, 32);
     const visible = visibleTiles(this.camera, this.width, this.height);
-    this.visible = new Set(visible.map((item) => item.key));
+    this.visible = new Set(visible.map((item) => tileKey(item.key, this.sliceY)));
+    const positions = new Set(visible.map((item) => item.key));
+    for (const key of this.displayed.keys()) if (!positions.has(key)) this.displayed.delete(key);
     let warnings = 0;
     for (const item of visible) {
-      const tile = this.cache.get(item.key);
-      if (!tile) continue;
-      warnings += tile.warnings;
+      let display = this.displayed.get(item.key);
+      const tile = this.nearestTile(item.key, display?.tile);
+      if (tile && tile !== display?.tile) {
+        tile.appearedAt ??= time;
+        display = { tile, previous: display?.tile, startedAt: display ? time : tile.appearedAt, duration: display ? LAYER_FADE_DURATION : TILE_FADE_DURATION };
+        this.displayed.set(item.key, display);
+      }
+      if (!display) continue;
+      warnings += this.cache.get(tileKey(item.key, this.sliceY))?.warnings || 0;
       const x = (item.x * MAP_TILE_SIZE - this.camera.x) * this.camera.zoom + this.width / 2;
       const y = (item.z * MAP_TILE_SIZE - this.camera.z) * this.camera.zoom + this.height / 2;
       const size = MAP_TILE_SIZE * this.camera.zoom;
-      tile.appearedAt ??= time;
-      if (this.reducedMotion?.matches) tile.appearedAt = time - TILE_FADE_DURATION;
-      const progress = Math.max(0, Math.min(1, (time - tile.appearedAt) / TILE_FADE_DURATION));
-      context.globalAlpha = easeOut(progress);
+      if (this.reducedMotion?.matches) {
+        display.startedAt = time - display.duration;
+        display.tile.appearedAt = time - TILE_FADE_DURATION;
+      }
+      const progress = Math.max(0, Math.min(1, (time - display.startedAt) / display.duration));
       if (progress < 1) animating = true;
-      context.drawImage(tile.image, Math.round(x), Math.round(y), Math.ceil(size), Math.ceil(size));
+      if (display.previous && progress < 1) {
+        context.globalAlpha = 1;
+        context.drawImage(this.blend(display.previous, display.tile, easeOut(progress)), Math.round(x), Math.round(y), Math.ceil(size), Math.ceil(size));
+      } else {
+        display.previous = undefined;
+        context.globalAlpha = easeOut(progress);
+        context.drawImage(display.tile.image, Math.round(x), Math.round(y), Math.ceil(size), Math.ceil(size));
+      }
     }
     context.globalAlpha = 1;
     const spawnX = (this.world.spawn.x - this.camera.x) * this.camera.zoom + this.width / 2;
@@ -214,35 +280,45 @@ export class MapViewport {
     context.moveTo(this.width / 2, this.height / 2 - 6);
     context.lineTo(this.width / 2, this.height / 2 + 6);
     context.stroke();
-    const needed = visible.filter((item) => !this.cache.has(item.key) && !this.pending.has(item.key) && !this.failed.has(item.key));
+    const needed = visible.filter((item) => {
+      const key = tileKey(item.key, this.sliceY);
+      return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
+    });
     this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, loading: needed.length + this.active, warnings, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 3 - this.active))) this.fetchTile(item);
     if (animating) this.schedule();
   }
 
   private async fetchTile(item: { x: number; z: number; key: string }) {
+    const signal = this.abort.signal;
+    const y = this.sliceY, key = tileKey(item.key, y);
     this.active++;
-    this.pending.add(item.key);
+    this.pending.add(key);
     try {
-      const result = await this.load(this.world.id, item.x, item.z, this.abort.signal);
-      if (this.abort.signal.aborted) return;
+      const result = await this.load(this.world.id, item.x, item.z, signal, y);
+      if (signal.aborted) return;
       const image = new Image();
       const loaded = new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error("MC_MAP_READ_FAILED")); });
       image.src = "data:image/png;base64," + result.image;
       await loaded;
-      if (this.abort.signal.aborted) return;
-      this.cache.set(item.key, { image, warnings: result.warnings });
+      if (signal.aborted) return;
+      this.cache.set(key, { image, warnings: result.warnings, position: item.key, y });
       while (this.cache.size > 256) {
         const outside = [...this.cache.keys()].find((key) => !this.visible.has(key));
         if (!outside) break;
         this.cache.delete(outside);
       }
     } catch (error) {
-      if (!this.abort.signal.aborted) { this.error = error; this.failed.add(item.key); }
+      if (!signal.aborted) {
+        if (this.sliceY === y) this.error = error;
+        this.failed.add(key);
+      }
     } finally {
-      this.active--;
-      this.pending.delete(item.key);
-      this.schedule();
+      if (!signal.aborted) {
+        this.active--;
+        this.pending.delete(key);
+        this.schedule();
+      }
     }
   }
 }

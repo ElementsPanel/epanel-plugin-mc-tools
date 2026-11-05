@@ -26,6 +26,20 @@ no readable saved terrain. Use **Refresh** after saving changes on the server.
 The viewer renders a top-down map with approximate block colors and height
 shading, and only reads chunks in the visible area. It does not generate chunks.
 
+Choose **水平切面 / Horizontal slice** in the view selector to inspect the blocks
+at a specific Y coordinate. Drag the slider next to the view selector to move
+through layers in steps of one block, or enter Y and press Enter or leave the
+field. The map blends between layers while retaining the previous terrain
+during loading, and reuses recently viewed layers when dragging back. Negative
+heights are supported; the reader accepts Y from -2048 to 2047 for custom worlds.
+The slider starts with the dimension's usual height range and expands for a
+manually entered height outside that range. Layers outside the saved terrain
+appear empty. Air stays transparent, so a slice does not show blocks above or
+below the selected layer. Checkerboard
+areas indicate air or unsaved chunks. Layer changes preserve position and zoom;
+choose **地表 / Surface** to return to the terrain overview. Both Java and
+Bedrock saves support slices, including the Nether ceiling.
+
 Java saves use Anvil `.mca` regions, including legacy numeric blocks and modern
 NBT palettes with negative heights. Legacy `Name` palettes and the 26.x string,
 `id`/`properties`, and mixed NBT palette encodings are supported. Overworld,

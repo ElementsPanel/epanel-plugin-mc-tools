@@ -36,6 +36,8 @@ export function worldMapApi(instanceUuid: string, daemonId: string) {
       if (refresh) authentication = undefined;
       return request<MapWorld[]>("worlds", { refresh: refresh ? "1" : "0" }, signal);
     },
-    tile: (world: string, x: number, z: number, signal: AbortSignal) => request<MapTile>("tile", { world, x: String(x), z: String(z) }, signal)
+    tile: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => request<MapTile>("tile", {
+      world, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    }, signal)
   };
 }

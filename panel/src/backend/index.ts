@@ -1,5 +1,5 @@
 import type { Context } from "cordis";
-import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, mapCoordinate } from "../../../shared/map";
+import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, mapCoordinate, mapHeight } from "../../../shared/map";
 import { registerPlayerRoutes } from "./players";
 
 export interface MapPanelContext extends Context {
@@ -43,6 +43,10 @@ export function registerWorldMapRoutes(ctx: MapPanelContext) {
               return mapCoordinate(Number(value));
             };
             Object.assign(data, { world: request.query.world, x: coordinate(request.query.x), z: coordinate(request.query.z) });
+            if (request.query.y !== undefined) {
+              if (typeof request.query.y !== "string" || !/^-?\d{1,4}$/.test(request.query.y)) throw new Error("MC_MAP_INVALID");
+              data.y = mapHeight(Number(request.query.y));
+            }
           } else data.refresh = request.query.refresh === "1";
           request.body = await new ctx.remote.Request(node).request(event, data, 30_000);
         } catch (error) { request.body = error; }

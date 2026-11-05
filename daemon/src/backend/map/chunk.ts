@@ -35,7 +35,7 @@ function blockStateName(block: unknown): string {
   return name;
 }
 
-export function chunkSurface(nbt: any, nether = false) {
+export function chunkSurface(nbt: any, nether = false, sliceY?: number) {
   const chunk = nbt.Level ?? nbt;
   const sections = chunk.sections ?? chunk.Sections;
   if (!Array.isArray(sections)) throw new Error("MC_MAP_CORRUPT");
@@ -43,6 +43,7 @@ export function chunkSurface(nbt: any, nether = false) {
   const layers = sections.map((section: any) => {
     const y = Number(section.Y);
     if (!Number.isInteger(y) || y < -128 || y > 127) throw new Error("MC_MAP_CORRUPT");
+    if (sliceY !== undefined && y !== Math.floor(sliceY / 16)) return undefined;
     const palette = section.block_states?.palette ?? section.Palette;
     if (Array.isArray(palette) && palette.length) {
       if (palette.length > 4096) throw new Error("MC_MAP_CORRUPT");
@@ -56,14 +57,27 @@ export function chunkSurface(nbt: any, nether = false) {
     }
     return undefined;
   }).filter(Boolean).sort((a: any, b: any) => b.y - a.y) as { y: number; block: (index: number) => string }[];
-  return surfaceFromLayers(layers, nether);
+  return surfaceFromLayers(layers, nether, sliceY);
 }
 
 export interface BlockLayer { y: number; block(index: number): string }
 
-export function surfaceFromLayers(layers: BlockLayer[], nether = false) {
+export function surfaceFromLayers(layers: BlockLayer[], nether = false, sliceY?: number) {
   const colors = new Uint32Array(256);
   const heights = new Int16Array(256).fill(-32768);
+  if (sliceY !== undefined) {
+    const layer = layers.find((item) => item.y === Math.floor(sliceY / 16));
+    if (layer) {
+      const offset = (sliceY - layer.y * 16) * 256;
+      for (let index = 0; index < 256; index++) {
+        const name = layer.block(offset + index);
+        if (isAir(name)) continue;
+        colors[index] = blockColor(name);
+        heights[index] = sliceY;
+      }
+    }
+    return { colors, heights };
+  }
   for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
     let open = !nether;
     let lastY = 121;
