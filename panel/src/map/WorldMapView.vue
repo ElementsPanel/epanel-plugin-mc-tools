@@ -241,7 +241,9 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-surface canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; cursor: grab; touch-action: none; }
 .mc-map-progress { position: absolute; inset: 0 0 auto; z-index: 2; }
 .mc-map-notice { position: absolute; top: 12px; left: 72px; right: 72px; z-index: 3; max-width: 620px; }
-.mc-map-render-toggle { position: absolute; top: 0; right: 0; z-index: 3; min-width: 60px; padding: 12px; border-radius: 0 0 0 24px !important; font-weight: 600; }
+.mc-map-render-toggle { position: absolute; top: 0; right: 0; z-index: 3; min-width: 60px; padding: 12px; font-weight: 600; }
+/* Outrank desktop mode's injected !important radius reset, regardless of load order. */
+.mc-map-surface .mc-map-render-toggle { border-radius: 0 0 0 24px !important; }
 .mc-map-scene-empty { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(420px, 90%); text-align: center; padding: 16px; border-radius: 16px; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); pointer-events: none; }
 .mc-map-empty { display: grid; place-items: center; height: 100%; min-height: 280px; color: #dbe5e5; padding: 24px; text-align: center; }
 .mc-map-position { position: absolute; border-radius: 0 24px 0 0; padding: 12px 20px; pointer-events: none; }

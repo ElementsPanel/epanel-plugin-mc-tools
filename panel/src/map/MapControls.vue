@@ -36,7 +36,9 @@ async function toggle(value: boolean) {
 
 <style scoped>
 .mc-map-ui { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
-.mc-map-menu { position: absolute; top: 0; left: 0; padding: 12px; border-radius: 0 0 24px 0 !important; pointer-events: auto; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
+.mc-map-menu { position: absolute; top: 0; left: 0; padding: 12px; pointer-events: auto; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
+/* Outrank desktop mode's injected !important radius reset, regardless of load order. */
+.mc-map-ui .mc-map-menu { border-radius: 0 0 24px 0 !important; }
 .mc-map-drawer-layout { width: 100%; height: 100%; }
 .mc-map-drawer-layout :deep(.v-navigation-drawer__scrim) { pointer-events: auto; }
 .mc-map-sidebar :deep(.v-navigation-drawer__content) { overflow: hidden; }
