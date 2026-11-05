@@ -1,29 +1,12 @@
 import { MAP_MAX_Y, MAP_MIN_Y, MAP_SCENE_MAX_QUADS, MAP_SCENE_SIZE, type MapSceneTile } from "../../../../shared/map";
-import { minecraftAssets, SceneKind, SCENE_EMISSIVE, SCENE_GRASS_OVERLAY, SCENE_GROUND, type MinecraftBlock } from "../../../../shared/scene";
+import { SceneKind, SCENE_EMISSIVE, SCENE_GRASS_OVERLAY, SCENE_GROUND } from "../../../../shared/scene";
 import type { BlockLayer } from "./chunk";
 import { isAir } from "./colors";
+import { blockFluid, blockMaterial, type Material } from "./materials";
 
 export interface SceneChunk { x: number; z: number; layers: BlockLayer[] }
-interface Material { name: string; color: number; model: MinecraftBlock; kind: SceneKind; emissive: boolean }
 const SIZE = MAP_SCENE_SIZE, AREA = SIZE * SIZE;
 const STRIDE = SIZE + 2, PADDED_AREA = STRIDE * STRIDE;
-const plants = /^(?:short_grass|tall_grass|fern|large_fern|dead_bush|.*sapling|dandelion|poppy|blue_orchid|allium|azure_bluet|.*tulip|oxeye_daisy|cornflower|lily_of_the_valley|wither_rose|sunflower|lilac|rose_bush|peony|wheat|carrots|potatoes|beetroots|brown_mushroom|red_mushroom|sugar_cane|vine|cave_vines|kelp|seagrass|tall_seagrass)$/;
-// BlockColors registers only these plants/leaves for biome tinting. In particular,
-// cherry, pale oak and azalea leaves retain the colors already in their sprites.
-const grassTint = new Set(["grass_block", "short_grass", "tall_grass", "fern", "large_fern", "potted_fern", "bush", "sugar_cane", "pink_petals", "wildflowers"]);
-const foliageTint = new Set(["oak_leaves", "jungle_leaves", "acacia_leaves", "dark_oak_leaves", "mangrove_leaves", "vine"]);
-
-const missingModel: MinecraftBlock = { faces: [0, 0, 0, 0, 0, 0], tint: 0, overlay: 0, kind: SceneKind.Opaque };
-function material(block: string, biome = "minecraft:plains", upper = false): Material {
-  const raw = block.replace(/^.*:/, ""), name = raw === "grass" ? "grass_block" : raw.replace(/^flowing_/, "");
-  const model = (upper ? minecraftAssets.blocks[name + "[half=upper]"] : undefined) ?? minecraftAssets.blocks[name] ?? missingModel;
-  const colors = minecraftAssets.biomes[biome] ?? minecraftAssets.biomes["minecraft:plains"];
-  const color = name === "water" ? colors[2] : name === "leaf_litter" ? colors[3] : name === "spruce_leaves" ? 0x619961 : name === "birch_leaves" ? 0x80a755
-    : foliageTint.has(name) ? colors[1] : name === "lily_pad" ? 0x208030 : name === "redstone_wire" ? 0x4c0000 : grassTint.has(name) ? colors[0] : 0xffffff;
-  return { name, color, model, kind: model.shape || plants.test(name) ? SceneKind.Plant : model.kind,
-    emissive: /^(?:lava|glowstone|sea_lantern|shroomlight|jack_o_lantern|torch|soul_torch|lantern|soul_lantern|end_rod|ochre_froglight|verdant_froglight|pearlescent_froglight)$/.test(name) };
-}
-
 /** Cull hidden voxel faces, then merge coplanar faces of the same block material. */
 export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: number, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "heights" | "limited">> {
   const cap = sliceY ?? (nether ? 120 : MAP_MAX_Y);
@@ -33,15 +16,16 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
   const height = Math.max(0, maxY - minY + 1);
   // Keep a one-block halo for face culling and AO, but emit only the owned tile.
   const voxels = new Uint16Array(PADDED_AREA * (height + 2));
+  let fluids: Uint16Array | undefined;
   const indexOf = (x: number, y: number, z: number) => (y + 1) * PADDED_AREA + (z + 1) * STRIDE + x + 1;
-  const materials: Material[] = [{ name: "air", color: 0xffffff, model: missingModel, kind: SceneKind.Opaque, emissive: false }];
+  const materials: Material[] = [{ name: "air", color: 0xffffff, model: blockMaterial("air").model, kind: SceneKind.Opaque, emissive: false }];
   const names = new Map<string, number>();
   const base = new Map<string, Material>();
   const palette = (name: string, biome?: string, properties?: Readonly<Record<string, string>>) => {
     const upper = properties?.half === "upper" || properties?.upper_block_bit === "1" || properties?.upper_block_bit === "true";
     const state = name + (upper ? "[half=upper]" : "");
     let source = base.get(state);
-    if (!source) { source = material(name, undefined, upper); base.set(state, source); }
+    if (!source) { source = blockMaterial(name, undefined, upper); base.set(state, source); }
     const tinted = source.color !== 0xffffff && !!(source.model.tint || source.model.overlay);
     const key = tinted ? state + "@" + (biome ?? "minecraft:plains") : state;
     let id = names.get(key);
@@ -50,7 +34,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
     else {
       if (materials.length >= 65536) throw new Error("MC_MAP_CORRUPT");
       id = materials.length;
-      materials.push(tinted && biome ? material(name, biome, upper) : source);
+      materials.push(tinted && biome ? blockMaterial(name, biome, upper) : source);
     }
     names.set(key, id);
     return id;
@@ -65,7 +49,14 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
         if (worldY < minY - 1 || worldY > maxY + 1 || worldY > cap) continue;
         for (let z = firstZ; z < lastZ; z++) for (let x = firstX; x < lastX; x++) {
           const index = y * 256 + z * 16 + x;
-          voxels[indexOf(chunk.x * 16 + x, worldY - minY, chunk.z * 16 + z)] = palette(layer.block(index), layer.biome?.(index), layer.properties?.(index));
+          const name = layer.block(index), biome = layer.biome?.(index), properties = layer.properties?.(index);
+          const position = indexOf(chunk.x * 16 + x, worldY - minY, chunk.z * 16 + z);
+          const fluid = layer.fluid?.(index) ?? blockFluid(name, properties);
+          if (fluid) {
+            fluids ??= new Uint16Array(voxels.length);
+            fluids[position] = palette(fluid, biome);
+          }
+          if (!/^(?:minecraft:)?(?:flowing_water|water|bubble_column)$/.test(name)) voxels[position] = palette(name, biome, properties);
         }
       }
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -78,9 +69,9 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
     if (owned) heights.writeInt16LE(-32768, column * 2);
     let open = !nether || sliceY !== undefined;
     for (let y = height - 1; y >= 0; y--) {
-      const index = indexOf(x, y, z), id = voxels[index];
+      const index = indexOf(x, y, z), id = voxels[index] || fluids?.[index];
       // The default Nether view opens its ceiling, as the 2D surface view does.
-      if (!open) { if (!id) open = true; else voxels[index] = 0; continue; }
+      if (!open) { if (!id) open = true; else { voxels[index] = 0; if (fluids) fluids[index] = 0; } continue; }
       if (id) { if (owned) heights.writeInt16LE(y + minY, column * 2); break; }
     }
   }
@@ -101,6 +92,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
     bytes[offset + 12] = color >> 16; bytes[offset + 13] = color >> 8; bytes[offset + 14] = color; bytes[offset + 15] = source.emissive ? 0 : ao;
   };
   const cell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : voxels[indexOf(x, y, z)];
+  const fluidCell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : fluids?.[indexOf(x, y, z)] || 0;
   const cube = (id: number) => id && materials[id].kind !== SceneKind.Plant ? id : 0;
   const occludes = (neighbor: number, current: number) => {
     if (!neighbor) return false;
@@ -109,7 +101,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
   };
   const dimensions = [SIZE, height, SIZE];
   // The cyclic U/V axes give positive-facing winding; negative faces reverse it in the viewer.
-  for (let axis = 0; axis < 3 && !limited; axis++) {
+  for (const fluidPass of fluids ? [false, true] : [false]) for (let axis = 0; axis < 3 && !limited; axis++) {
     const u = (axis + 1) % 3, v = (axis + 2) % 3;
     const width = dimensions[u], tall = dimensions[v];
     const mask = new Uint32Array(width * tall), position = [0, 0, 0];
@@ -118,11 +110,15 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
       for (let sign = 0; sign < 2 && !limited; sign++) {
         for (let j = 0; j < tall; j++) for (let i = 0; i < width; i++) {
           position[u] = i; position[v] = j; position[axis] = plane - 1;
-          const a = cube(cell(position[0], position[1], position[2]));
+          const solidA = cube(cell(position[0], position[1], position[2]));
+          const a = fluidPass ? fluidCell(position[0], position[1], position[2]) : solidA;
           position[axis] = plane;
-          const b = cube(cell(position[0], position[1], position[2]));
+          const solidB = cube(cell(position[0], position[1], position[2]));
+          const b = fluidPass ? fluidCell(position[0], position[1], position[2]) : solidB;
           const owned = sign ? plane < dimensions[axis] : plane > 0;
-          const current = owned ? sign ? b : a : 0, neighbor = sign ? a : b;
+          const solidCurrent = sign ? solidB : solidA;
+          const current = owned && !(fluidPass && solidCurrent && materials[solidCurrent].kind === SceneKind.Opaque) ? sign ? b : a : 0;
+          const neighbor = (sign ? a : b) || (fluidPass ? sign ? solidA : solidB : 0);
           let ao = 0;
           if (current && !occludes(neighbor, current) && materials[current].kind !== SceneKind.Translucent && !materials[current].emissive) {
             const point = [...position]; point[axis] = sign ? plane - 1 : plane;

@@ -95,6 +95,40 @@ test("water joins across scene boundaries and biome colors without duplicate int
   assert(cut.some(q => q.face === 2 && q.y === 1));
 });
 
+test("underwater plants coexist with a continuous water volume instead of carving air holes", async () => {
+  for (const plant of ["seagrass", "tall_seagrass", "kelp", "kelp_plant"]) {
+    const wet = layer(0, (x, y, z) => y === 0 && z === 0 && x < 2 ? x === 0 ? plant : "water" : "air");
+    const faces = quads(await tile([chunk([wet])]));
+    const water = faces.filter(face => face.kind === SceneKind.Translucent);
+    assert.equal(water.length, 6, plant + " shares the outer water shell");
+    assert(!water.some(face => face.face < 2 && face.x === 1), "no internal wall between water and the waterlogged plant");
+    assert.equal(faces.filter(face => face.kind === SceneKind.Plant).length, 2);
+    assert(water.some(face => face.face === 2 && face.y === 1 && face.h === 2));
+    assert.equal(surfaceFromLayers([wet]).colors[0], load("daemon/src/backend/map/colors.ts").blockColor("water"));
+  }
+});
+
+test("Java waterlogged states and Bedrock secondary storage retain both the block and its water", async () => {
+  const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
+  const { bedrockLayer } = load("daemon/src/backend/map/bedrock.ts");
+  const nbt = require("prismarine-nbt");
+  const java = chunkLayers({ DataVersion: 4903, sections: [{ Y: 0, block_states: { palette: [
+    { Name: "minecraft:mangrove_roots", Properties: { waterlogged: "true" } }
+  ] } }] });
+  const faces = quads(await tile([chunk(java)]));
+  assert(faces.some(face => face.kind === SceneKind.Translucent));
+  assert(faces.some(face => sceneTextures.get(face.texture)[0].includes("mangrove_roots")));
+  const storage = name => Buffer.concat([Buffer.from([0]), nbt.writeUncompressed(nbt.comp({ name: nbt.string("minecraft:" + name), states: nbt.comp({}) }), "little")]);
+  const wet = bedrockLayer(Buffer.concat([Buffer.from([9, 2, 0]), storage("seagrass"), storage("water")]), 0);
+  assert.equal(wet.block(1234), "minecraft:seagrass");
+  assert.equal(wet.fluid(1234), "minecraft:water");
+  const decoded = decodeScene(await tile([chunk([wet])]));
+  assert.equal(decoded.meshes.find(mesh => mesh.kind === SceneKind.Translucent).count, 6);
+  assert.equal(decoded.meshes.find(mesh => mesh.kind === SceneKind.Plant).count, 4096 * 2);
+  const dry = bedrockLayer(Buffer.concat([Buffer.from([9, 1, 0]), storage("mangrove_roots")]), 0);
+  assert.equal(dry.fluid(0), undefined);
+});
+
 test("vanilla face textures retain their original tint masks and Java biome palettes color grass", async () => {
   const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
   const layers = chunkLayers({ DataVersion: 4903, sections: [{ Y: 0,
@@ -111,6 +145,45 @@ test("vanilla face textures retain their original tint masks and Java biome pale
   assert.equal(sceneTextures.get(side.texture)[0], "block/grass_block_side");
   assert(side.flags & SCENE_GRASS_OVERLAY);
   assert.equal(side.tint, top.tint);
+});
+
+test("26.3 dappled forest uses its own grass, foliage and water colors through NBT decoding and scene meshing", async () => {
+  const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
+  // Official 26.3 biome effects; this biome previously fell back to plains.
+  const expected = [0xdf6827, 0xe68e30, 0x375154, 0x8c3a04];
+  assert.equal(minecraftAssets.biomeVersion, "26.3");
+  assert.deepEqual(minecraftAssets.biomes["minecraft:dappled_forest"], expected);
+  for (const [name, color] of [["grass_block", expected[0]], ["short_grass", expected[0]],
+    ["oak_leaves", expected[1]], ["water", expected[2]], ["leaf_litter", expected[3]]]) {
+    const layers = chunkLayers({ DataVersion: 5023, sections: [{ Y: 0,
+      block_states: { palette: ["minecraft:" + name] }, biomes: { palette: ["minecraft:dappled_forest"] }
+    }] });
+    const result = await tile([chunk(layers)], false, 0), faces = quads(result);
+    const tinted = faces.filter(face => name === "short_grass" ? face.face >= 6 : face.face === 2);
+    assert(tinted.length > 0, name);
+    assert(tinted.every(face => face.tint === color), name);
+    assert(decodeScene(result).meshes.some(mesh => {
+      const rgb = mesh.colors;
+      return Array.from({ length: mesh.count }, (_, i) => (rgb[i * 3] << 16) | (rgb[i * 3 + 1] << 8) | rgb[i * 3 + 2]).includes(color);
+    }), "the correct RGB tint reaches the shared 2D/3D renderer");
+  }
+});
+
+test("26.3 biome borders keep distinct grass and water tints instead of merging them with plains", async () => {
+  const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
+  let packed = 0n;
+  for (let i = 0; i < 64; i++) if ((i & 3) >= 2) packed |= 1n << BigInt(i);
+  for (const [block, first, second] of [["grass_block", 0xdf6827, 0x91bd59], ["water", 0x375154, 0x3f76e4]]) {
+    const layers = chunkLayers({ DataVersion: 5023, sections: [{ Y: 0,
+      block_states: { palette: ["minecraft:" + block] },
+      biomes: { palette: ["minecraft:dappled_forest", "minecraft:plains"], data: [packed] }
+    }] });
+    const faces = quads(await tile([chunk(layers)], false, 0));
+    const tops = faces.filter(face => face.face === 2);
+    assert(tops.some(face => face.x === 0 && face.tint === first));
+    assert(tops.some(face => face.x === 8 && face.tint === second));
+    assert(!faces.some(face => face.face < 2 && face.x === 8), "a tint change does not create a wall");
+  }
 });
 
 test("leaf litter lies above the visible ground with Java dry-foliage tint, and model-defined bushes use crosses", async () => {

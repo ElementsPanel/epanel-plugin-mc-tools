@@ -1,4 +1,5 @@
-import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld } from "../../../shared/map";
+import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
+import { loadSceneViewport } from "./scene-loader";
 
 export interface Camera { x: number; z: number; zoom: number }
 export interface MapViewState { x: number; z: number; zoom: number; loading: number; warnings: number; error?: unknown; limited?: boolean; empty?: boolean }
@@ -9,7 +10,7 @@ export interface MapRenderer {
   setLayer(y?: number): void;
   dispose(): void;
 }
-export const loadSceneViewport = () => import("./scene-viewport");
+export const MAP_DETAIL_ZOOM = 4;
 interface Tile { image: HTMLImageElement; warnings: number; position: string; y?: number; appearedAt?: number }
 interface DisplayTile { tile: Tile; previous?: Tile; startedAt: number; duration: number }
 interface ZoomAnimation { from: number; to: number; x: number; y: number; startedAt: number }
@@ -42,6 +43,14 @@ export function visibleTiles(camera: Camera, width: number, height: number) {
   return result.sort((a, b) => Math.hypot(a.x * MAP_TILE_SIZE - camera.x, a.z * MAP_TILE_SIZE - camera.z) - Math.hypot(b.x * MAP_TILE_SIZE - camera.x, b.z * MAP_TILE_SIZE - camera.z));
 }
 
+/** Adjacent tiles share the exact same physical pixel edge, including at fractional zoom/DPR. */
+export function tileBounds(camera: Camera, width: number, height: number, x: number, z: number, ratio: number, ratioY = ratio) {
+  const edgeX = (tile: number) => Math.round(((tile * MAP_TILE_SIZE - camera.x) * camera.zoom + width / 2) * ratio) / ratio;
+  const edgeZ = (tile: number) => Math.round(((tile * MAP_TILE_SIZE - camera.z) * camera.zoom + height / 2) * ratioY) / ratioY;
+  const left = edgeX(x), top = edgeZ(z);
+  return { x: left, y: top, width: edgeX(x + 1) - left, height: edgeZ(z + 1) - top };
+}
+
 export class MapViewport {
   readonly camera: Camera = { x: 0, z: 0, zoom: 2 };
   private readonly cache = new Map<string, Tile>();
@@ -51,6 +60,16 @@ export class MapViewport {
   private visible = new Set<string>();
   private readonly abort = new AbortController();
   private blendCanvas?: HTMLCanvasElement | OffscreenCanvas;
+  private detail?: import("./scene-viewport").SceneViewport;
+  private detailCanvas?: HTMLCanvasElement;
+  private backdropCanvas?: HTMLCanvasElement;
+  private detailFrame?: { camera: Camera; width: number; height: number; orthographic: boolean; y?: number };
+  private mode: "2d" | "3d" = "2d";
+  private detailState?: MapViewState;
+  private detailGeneration = 0;
+  private detailLoading = false;
+  private detailUnavailable = false;
+  private detailError?: unknown;
   private readonly observer: ResizeObserver;
   private world: MapWorld;
   private width = 1;
@@ -67,7 +86,8 @@ export class MapViewport {
     world: MapWorld,
     private readonly load: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapTile>,
     private readonly changed: (state: MapViewState) => void,
-    private sliceY?: number
+    private sliceY?: number,
+    private readonly loadScene?: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapSceneTile>
   ) {
     mapHeight(sliceY);
     this.world = world;
@@ -78,7 +98,7 @@ export class MapViewport {
     canvas.addEventListener("pointerup", this.up);
     canvas.addEventListener("pointercancel", this.up);
     canvas.addEventListener("wheel", this.wheel, { passive: false });
-    this.observer = new ResizeObserver(() => this.resize());
+    this.observer = new ResizeObserver(entries => this.resize(entries.find(entry => entry.target === canvas)?.contentRect));
     this.observer.observe(canvas);
     this.resize();
   }
@@ -87,17 +107,35 @@ export class MapViewport {
     this.stopZoom();
     this.camera.x = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, x));
     this.camera.z = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, z));
+    if (this.mode === "3d") this.detail?.center(this.camera.x, this.camera.z);
     this.schedule();
   }
 
   zoom(factor: number) {
+    if (this.mode === "3d" && this.detail) { this.detail.zoom(factor); return; }
     this.animateZoom(factor, this.width / 2, this.height / 2);
+  }
+
+  setMode(mode: "2d" | "3d") {
+    if (this.mode === mode || this.abort.signal.aborted) return;
+    this.stopZoom();
+    const previous = this.mode;
+    if (this.dragging) { this.canvas.releasePointerCapture(this.dragging.id); this.dragging = undefined; }
+    this.canvas.style.cursor = "grab";
+    this.mode = mode;
+    if (this.detail) {
+      if (mode === "3d") this.detail.setTopDownView(this.camera, this.width, this.height);
+      this.detail.setProjection(mode === "3d" ? "perspective" : "orthographic");
+      if (previous === "3d") Object.assign(this.camera, this.detail.camera);
+    }
+    this.schedule();
   }
 
   setLayer(y?: number) {
     mapHeight(y);
     if (this.abort.signal.aborted || this.sliceY === y) return;
     this.sliceY = y;
+    this.detail?.setLayer(y);
     this.failed.clear();
     this.error = undefined;
     this.schedule();
@@ -115,17 +153,24 @@ export class MapViewport {
     this.cache.clear();
     this.displayed.clear();
     this.blendCanvas = undefined;
+    this.stopDetail();
   }
 
-  private resize() {
-    const bounds = this.canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return;
+  private resize(size?: Pick<DOMRectReadOnly, "width" | "height">) {
+    // Dialog/window scale animations change client rects without a layout resize.
+    // All layers must use the untransformed content box, including fractional sizes.
+    const width = size?.width ?? this.canvas.clientWidth, height = size?.height ?? this.canvas.clientHeight;
+    if (!width || !height) return;
     this.stopZoom();
-    this.width = bounds.width;
-    this.height = bounds.height;
+    this.width = width;
+    this.height = height;
     const ratio = Math.min(devicePixelRatio || 1, 2);
     this.canvas.width = Math.round(this.width * ratio);
     this.canvas.height = Math.round(this.height * ratio);
+    if (this.backdropCanvas) {
+      this.backdropCanvas.width = this.canvas.width;
+      this.backdropCanvas.height = this.canvas.height;
+    }
     this.schedule();
   }
 
@@ -165,19 +210,20 @@ export class MapViewport {
   }
 
   private down = (event: PointerEvent) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || this.mode === "3d" || this.detail?.isTransitioning) return;
     this.stopZoom();
     this.schedule();
     this.canvas.setPointerCapture(event.pointerId);
-    this.dragging = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    this.dragging = { id: event.pointerId, ...this.pointerPosition(event) };
     this.canvas.style.cursor = "grabbing";
   };
 
   private move = (event: PointerEvent) => {
     if (this.dragging?.id !== event.pointerId) return;
-    this.center(this.camera.x - (event.clientX - this.dragging.x) / this.camera.zoom, this.camera.z - (event.clientY - this.dragging.y) / this.camera.zoom);
-    this.dragging.x = event.clientX;
-    this.dragging.y = event.clientY;
+    const { x, y } = this.pointerPosition(event);
+    this.center(this.camera.x - (x - this.dragging.x) / this.camera.zoom, this.camera.z - (y - this.dragging.y) / this.camera.zoom);
+    this.dragging.x = x;
+    this.dragging.y = y;
   };
 
   private up = (event: PointerEvent) => {
@@ -187,11 +233,17 @@ export class MapViewport {
   };
 
   private wheel = (event: WheelEvent) => {
+    if (this.mode === "3d" || this.detail?.isTransitioning) return;
     event.preventDefault();
-    const bounds = this.canvas.getBoundingClientRect();
+    const { x, y } = this.pointerPosition(event);
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.height : 1);
-    this.animateZoom(Math.exp(-Math.max(-1000, Math.min(1000, delta)) * 0.002), event.clientX - bounds.left, event.clientY - bounds.top);
+    this.animateZoom(Math.exp(-Math.max(-1000, Math.min(1000, delta)) * 0.002), x, y);
   };
+
+  private pointerPosition(event: PointerEvent | WheelEvent) {
+    const bounds = this.canvas.getBoundingClientRect();
+    return { x: (event.clientX - bounds.left) * this.width / bounds.width, y: (event.clientY - bounds.top) * this.height / bounds.height };
+  }
 
   private nearestTile(position: string, previous?: Tile) {
     const exact = this.cache.get(tileKey(position, this.sliceY));
@@ -207,32 +259,44 @@ export class MapViewport {
   }
 
   private blend(previous: Tile, tile: Tile, progress: number): CanvasImageSource {
+    const before = previous.image, current = tile.image, size = MAP_TILE_SIZE;
     if (!this.blendCanvas) {
       this.blendCanvas = typeof OffscreenCanvas === "function"
         ? new OffscreenCanvas(MAP_TILE_SIZE, MAP_TILE_SIZE) : this.canvas.ownerDocument.createElement("canvas");
-      this.blendCanvas.width = this.blendCanvas.height = MAP_TILE_SIZE;
     }
+    if (this.blendCanvas.width !== size) this.blendCanvas.width = this.blendCanvas.height = size;
     const context = this.blendCanvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) return tile.image;
-    context.clearRect(0, 0, MAP_TILE_SIZE, MAP_TILE_SIZE);
+    context.clearRect(0, 0, size, size);
+    context.imageSmoothingEnabled = false;
     context.globalCompositeOperation = "source-over";
     context.globalAlpha = 1 - progress;
-    context.drawImage(previous.image, 0, 0);
+    context.drawImage(before, 0, 0, size, size);
     // Blend premultiplied pixels so air fades out and opaque terrain does not darken.
     context.globalCompositeOperation = "lighter";
     context.globalAlpha = progress;
-    context.drawImage(tile.image, 0, 0);
+    context.drawImage(current, 0, 0, size, size);
     return this.blendCanvas;
   }
 
   private draw(time = performance.now()) {
     let animating = this.advanceZoom(time);
-    const context = this.canvas.getContext("2d");
-    if (!context) return;
-    const ratio = this.canvas.width / this.width;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.globalAlpha = 1;
-    context.imageSmoothingEnabled = false;
+    const foreground = this.canvas.getContext("2d");
+    if (!foreground) return;
+    this.updateDetail();
+    this.presentScene();
+    const context = this.backdropCanvas?.getContext("2d") ?? foreground;
+    const ratio = this.canvas.width / this.width, ratioY = this.canvas.height / this.height;
+    for (const layer of new Set([foreground, context])) {
+      layer.setTransform(ratio, 0, 0, ratioY, 0, 0);
+      layer.globalAlpha = 1;
+      layer.imageSmoothingEnabled = false;
+    }
+    if (context !== foreground) foreground.clearRect(0, 0, this.width, this.height);
+    if (this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible) {
+      this.changed({ ...this.detailState!, x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom });
+      return;
+    }
     context.fillStyle = "#19252a";
     context.fillRect(0, 0, this.width, this.height);
     context.fillStyle = "#213035";
@@ -252,9 +316,7 @@ export class MapViewport {
       }
       if (!display) continue;
       warnings += this.cache.get(tileKey(item.key, this.sliceY))?.warnings || 0;
-      const x = (item.x * MAP_TILE_SIZE - this.camera.x) * this.camera.zoom + this.width / 2;
-      const y = (item.z * MAP_TILE_SIZE - this.camera.z) * this.camera.zoom + this.height / 2;
-      const size = MAP_TILE_SIZE * this.camera.zoom;
+      const bounds = tileBounds(this.camera, this.width, this.height, item.x, item.z, ratio, ratioY);
       if (this.reducedMotion?.matches) {
         display.startedAt = time - display.duration;
         display.tile.appearedAt = time - TILE_FADE_DURATION;
@@ -263,14 +325,28 @@ export class MapViewport {
       if (progress < 1) animating = true;
       if (display.previous && progress < 1) {
         context.globalAlpha = 1;
-        context.drawImage(this.blend(display.previous, display.tile, easeOut(progress)), Math.round(x), Math.round(y), Math.ceil(size), Math.ceil(size));
+        context.drawImage(this.blend(display.previous, display.tile, easeOut(progress)), bounds.x, bounds.y, bounds.width, bounds.height);
       } else {
         display.previous = undefined;
         context.globalAlpha = easeOut(progress);
-        context.drawImage(display.tile.image, Math.round(x), Math.round(y), Math.ceil(size), Math.ceil(size));
+        context.drawImage(display.tile.image, bounds.x, bounds.y, bounds.width, bounds.height);
       }
     }
     context.globalAlpha = 1;
+    this.drawMarkers(foreground);
+    const needed = visible.filter((item) => {
+      const key = tileKey(item.key, this.sliceY);
+      return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
+    });
+    this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom,
+      loading: needed.length + this.active + (this.wantsScene ? this.detailState?.loading || 0 : 0) + Number(this.detailLoading),
+      warnings: Math.max(warnings, this.wantsScene ? this.detailState?.warnings || 0 : 0), limited: this.wantsScene && this.detailState?.limited,
+      error: this.error ?? (this.wantsScene ? this.detailError ?? this.detailState?.error : undefined) });
+    for (const item of needed.slice(0, Math.max(0, 3 - this.active))) this.fetchTile(item);
+    if (animating) this.schedule();
+  }
+
+  private drawMarkers(context: CanvasRenderingContext2D) {
     const spawnX = (this.world.spawn.x - this.camera.x) * this.camera.zoom + this.width / 2;
     const spawnZ = (this.world.spawn.z - this.camera.z) * this.camera.zoom + this.height / 2;
     context.fillStyle = "#ffd56a";
@@ -288,13 +364,89 @@ export class MapViewport {
     context.moveTo(this.width / 2, this.height / 2 - 6);
     context.lineTo(this.width / 2, this.height / 2 + 6);
     context.stroke();
-    const needed = visible.filter((item) => {
-      const key = tileKey(item.key, this.sliceY);
-      return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
+  }
+
+  private get wantsScene() { return this.mode === "3d" || this.camera.zoom >= MAP_DETAIL_ZOOM || !!this.detail?.isTransitioning; }
+  private get sceneVisible() { return this.wantsScene && this.detail?.ready && !!this.detailCanvas?.width && this.detailFrame?.y === this.sliceY; }
+
+  private presentScene() {
+    const canvas = this.detailCanvas, frame = this.detailFrame;
+    if (!canvas) return;
+    canvas.style.visibility = this.sceneVisible && frame ? "visible" : "hidden";
+    if (!frame) return;
+    // Composite WebGL directly. Copying it with 2D drawImage can swap R/B channels
+    // on accelerated browser backends, including for textures without biome tint.
+    const scale = frame.orthographic ? this.camera.zoom / frame.camera.zoom : 1;
+    const x = frame.orthographic ? (frame.camera.x - this.camera.x) * this.camera.zoom + this.width / 2 - frame.width * scale / 2 : 0;
+    const y = frame.orthographic ? (frame.camera.z - this.camera.z) * this.camera.zoom + this.height / 2 - frame.height * scale / 2 : 0;
+    canvas.style.width = `${frame.orthographic ? frame.width : this.width}px`;
+    canvas.style.height = `${frame.orthographic ? frame.height : this.height}px`;
+    canvas.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  }
+
+  private updateDetail() {
+    if (!this.loadScene || !this.wantsScene) {
+      // A far overview pauses the shared scene; its bounded cache is reused on return.
+      this.detail?.setActive(false);
+      if (this.detailLoading) { this.detailGeneration++; this.detailLoading = false; }
+      return;
+    }
+    if (this.detailUnavailable) return;
+    if (this.detail) {
+      this.detail.setActive(true);
+      if (this.mode === "2d") this.detail.setTopDownView(this.camera, this.width, this.height);
+      else this.detail.setSize(this.width, this.height);
+      return;
+    }
+    if (this.detailLoading) return;
+    const generation = ++this.detailGeneration;
+    this.detailLoading = true;
+    void loadSceneViewport().then(({ SceneViewport }) => {
+      if (this.abort.signal.aborted || generation !== this.detailGeneration || !this.wantsScene) return;
+      const canvas = this.canvas.ownerDocument.createElement("canvas");
+      this.detailCanvas = canvas;
+      const backdrop = this.canvas.ownerDocument.createElement("canvas");
+      this.backdropCanvas = backdrop;
+      backdrop.width = this.canvas.width; backdrop.height = this.canvas.height;
+      for (const layer of [backdrop, canvas]) {
+        layer.setAttribute("aria-hidden", "true");
+        Object.assign(layer.style, { position: "absolute", inset: "0", width: "100%", height: "100%", pointerEvents: "none", transformOrigin: "0 0" });
+      }
+      canvas.style.visibility = "hidden";
+      // Tiles stay below WebGL; the original canvas keeps markers and all input.
+      this.canvas.before(backdrop, canvas);
+      this.detail = new SceneViewport(canvas, this.world, this.loadScene!, state => {
+        if (this.abort.signal.aborted || generation !== this.detailGeneration) return;
+        if (state.error instanceof Error && state.error.message === "MC_MAP_WEBGL_UNAVAILABLE") {
+          this.detailUnavailable = true; this.detailError = state.error; this.stopDetail();
+        } else {
+          this.detailState = state;
+          if (this.mode === "3d" && this.detail) Object.assign(this.camera, this.detail.camera);
+          if (this.detail?.ready) this.detailFrame = { ...this.detail.frameView, y: this.sliceY };
+          this.presentScene();
+        }
+        this.schedule();
+      }, this.sliceY, this.mode === "3d" ? "perspective" : "orthographic", this.canvas);
+      this.detail.setSize(this.width, this.height);
+      this.detail.camera.zoom = this.camera.zoom;
+      this.detail.center(this.camera.x, this.camera.z);
+    }).catch(error => {
+      if (this.abort.signal.aborted || generation !== this.detailGeneration) return;
+      this.detailUnavailable = true; this.detailError = error; this.stopDetail(); this.schedule();
+    }).finally(() => {
+      if (generation === this.detailGeneration) { this.detailLoading = false; this.schedule(); }
     });
-    this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, loading: needed.length + this.active, warnings, error: this.error });
-    for (const item of needed.slice(0, Math.max(0, 3 - this.active))) this.fetchTile(item);
-    if (animating) this.schedule();
+  }
+
+  private stopDetail() {
+    if (!this.detailLoading && !this.detail && !this.detailCanvas) return;
+    this.detailGeneration++; this.detailLoading = false;
+    this.detail?.dispose(); this.detail = undefined;
+    for (const canvas of [this.detailCanvas, this.backdropCanvas]) if (canvas) {
+      canvas.remove(); canvas.width = canvas.height = 0;
+    }
+    this.backdropCanvas = undefined;
+    this.detailCanvas = undefined; this.detailFrame = undefined; this.detailState = undefined;
   }
 
   private async fetchTile(item: { x: number; z: number; key: string }) {

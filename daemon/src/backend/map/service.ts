@@ -10,7 +10,8 @@ import { meshScene, type SceneChunk } from "./scene";
 
 
 export class WorldMapService {
-  private readonly cache = new Map<string, { stamp: string; tile: MapTile }>();
+  private readonly cache = new Map<string, { stamp: string; tile: MapTile; bytes: number }>();
+  private tileBytes = 0;
   private readonly pending = new Map<string, Promise<MapTile>>();
   private readonly sceneCache = new Map<string, { stamp: string; tile: MapSceneTile; bytes: number }>();
   private readonly scenePending = new Map<string, Promise<MapSceneTile>>();
@@ -52,7 +53,7 @@ export class WorldMapService {
     this.catalog.set(key, { at: Date.now(), worlds });
     if (this.catalog.size > 64) this.catalog.delete(this.catalog.keys().next().value!);
     if (refresh) for (const world of worlds) for (const key of this.cache.keys()) {
-      if (key.startsWith(world.root + ":" + world.id + ":")) this.cache.delete(key);
+      if (key.startsWith(world.root + ":" + world.id + ":")) this.evictTile(key);
     }
     if (refresh) for (const world of worlds) for (const [key, cached] of this.sceneCache) {
       if (key.startsWith(world.root + ":" + world.id + ":")) {
@@ -81,6 +82,7 @@ export class WorldMapService {
   async dispose() {
     this.disposed = true;
     this.cache.clear();
+    this.tileBytes = 0;
     this.sceneCache.clear();
     this.sceneBytes = 0;
     this.catalog.clear();
@@ -226,18 +228,23 @@ export class WorldMapService {
     const pixels = new Uint8Array(colors.length * 4);
     for (let i = 0; i < colors.length; i++) {
       if (heights[i] === -32768) continue;
-      const before = i >= MAP_TILE_SIZE ? heights[i - MAP_TILE_SIZE] : heights[i];
-      const shade = before === -32768 ? 1 : Math.max(0.72, Math.min(1.2, 1 + (heights[i] - before) * 0.045));
-      pixels[i * 4] = Math.min(255, Math.round(((colors[i] >> 16) & 255) * shade));
-      pixels[i * 4 + 1] = Math.min(255, Math.round(((colors[i] >> 8) & 255) * shade));
-      pixels[i * 4 + 2] = Math.min(255, Math.round((colors[i] & 255) * shade));
+      pixels[i * 4] = (colors[i] >> 16) & 255;
+      pixels[i * 4 + 1] = (colors[i] >> 8) & 255;
+      pixels[i * 4 + 2] = colors[i] & 255;
       pixels[i * 4 + 3] = 255;
     }
     const tile = { image: encodePng(pixels, MAP_TILE_SIZE, MAP_TILE_SIZE).toString("base64"), chunks, warnings };
     if (!this.disposed && !warnings) {
-      this.cache.set(key, { stamp, tile });
-      if (this.cache.size > 128) this.cache.delete(this.cache.keys().next().value!);
+      this.evictTile(key);
+      const bytes = tile.image.length;
+      this.cache.set(key, { stamp, tile, bytes }); this.tileBytes += bytes;
+      while (this.cache.size > 128 || this.tileBytes > 32 * 1024 * 1024) this.evictTile(this.cache.keys().next().value!);
     }
     return tile;
+  }
+
+  private evictTile(key: string) {
+    const cached = this.cache.get(key);
+    if (cached) { this.tileBytes -= cached.bytes; this.cache.delete(key); }
   }
 }

@@ -29,7 +29,7 @@ test("viewport limits tile loading and cancels requests, animation frames, and l
   globalThis.cancelAnimationFrame = (id) => frames.delete(id);
   globalThis.devicePixelRatio = 3;
   const canvas = {
-    style: {}, getBoundingClientRect: () => ({ width: 512, height: 256 }),
+    style: {}, clientWidth: 512, clientHeight: 256, getBoundingClientRect: () => ({ width: 512, height: 256 }),
     getContext: () => new Proxy({}, { get: () => () => {}, set: () => true }),
     addEventListener(name, callback) { listeners.set(name, callback); },
     removeEventListener(name) { listeners.delete(name); }
@@ -84,7 +84,7 @@ function animatedViewport(t, reduced = false) {
     fill() { markers.push(this.globalAlpha); }
   };
   const canvas = {
-    style: {}, getBoundingClientRect: () => ({ left: 10, top: 20, width: 512, height: 256 }), getContext: () => context,
+    style: {}, clientWidth: 512, clientHeight: 256, getBoundingClientRect: () => ({ left: 10, top: 20, width: 512, height: 256 }), getContext: () => context,
     setPointerCapture() {}, addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name)
   };
   const { MapViewport, worldPosition } = loader()("panel/src/map/viewport.ts");
@@ -308,6 +308,7 @@ test("map view validates coordinates and layers, retains the selected layer on r
       constructor(canvas, world, load, changed, y) { this.camera = { ...world.spawn, zoom: 2 }; this.world = world; this.layer = y; renderers.push(this); }
       dispose() { this.disposed = true; }
       center(x, z) { this.target = { x, z }; }
+      setMode() {}
       setLayer(y) { this.layer = y; }
     } }
   });

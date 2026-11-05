@@ -2,13 +2,16 @@
 """Build the map's texture atlas from a locally supplied Minecraft client JAR.
 
 Usage: python3 scripts/import-minecraft-assets.py /path/to/client.jar
+Update colors from a newer server JAR while retaining the existing texture atlas:
+  python3 scripts/import-minecraft-assets.py /path/to/client.jar --biomes /path/to/server.jar --biomes-only
 Requires Pillow only when reimporting; normal plugin builds use the saved atlas.
 """
+import argparse
 import hashlib
 import io
 import json
 import math
-import sys
+from contextlib import contextmanager
 from functools import lru_cache, reduce
 from pathlib import Path
 from zipfile import ZipFile
@@ -20,8 +23,60 @@ DIRECTIONS = ["east", "west", "up", "down", "south", "north"]
 INNER, PADDING, CELL, COLUMNS = 16, 8, 32, 64
 
 
-def main(jar):
+@contextmanager
+def resources(jar):
     with ZipFile(jar) as archive:
+        bundled = [name for name in archive.namelist() if name.startswith("META-INF/versions/") and name.endswith(".jar")]
+        if bundled:
+            with ZipFile(io.BytesIO(archive.read(bundled[0]))) as inner:
+                yield inner
+        else:
+            yield archive
+
+
+def biome_palette(archive, biome_archive):
+    entries = set(archive.namelist())
+    colormaps = {name: Image.open(io.BytesIO(archive.read("assets/minecraft/textures/colormap/" + name + ".png"))).convert("RGB") for name in ("grass", "foliage", "dry_foliage") if "assets/minecraft/textures/colormap/" + name + ".png" in entries}
+    colormaps.setdefault("dry_foliage", colormaps["foliage"])
+    def color(value):
+        return int(value.removeprefix("#"), 16) if isinstance(value, str) else value
+    def sample(name, temperature, humidity):
+        x, y = int((1 - temperature) * 255), int((1 - humidity * temperature) * 255)
+        r, g, b = colormaps[name].getpixel((x, y))
+        return (r << 16) | (g << 8) | b
+    biomes = {}
+    for filename in sorted(biome_archive.namelist()):
+        if not filename.startswith("data/minecraft/worldgen/biome/") or not filename.endswith(".json"):
+            continue
+        biome = json.loads(biome_archive.read(filename))
+        effects = biome.get("effects", {})
+        temperature = max(0, min(1, biome.get("temperature", 0.8)))
+        humidity = max(0, min(1, biome.get("downfall", 0.4)))
+        grass = color(effects.get("grass_color", sample("grass", temperature, humidity)))
+        if effects.get("grass_color_modifier") == "dark_forest":
+            grass = ((grass & 0xfefefe) + 0x28340a) >> 1
+        elif effects.get("grass_color_modifier") == "swamp":
+            grass = 0x6a7039
+        biomes["minecraft:" + Path(filename).stem] = [grass, color(effects.get("foliage_color", sample("foliage", temperature, humidity))), color(effects.get("water_color", 0x3f76e4)), color(effects.get("dry_foliage_color", sample("dry_foliage", temperature, humidity)))]
+    return biomes
+
+
+def main(jar, biome_jar=None, biomes_only=False):
+    biome_jar = biome_jar or jar
+    with resources(jar) as archive, resources(biome_jar) as biome_archive:
+        biome_version = json.loads(biome_archive.read("version.json"))["id"]
+        biome_source = {"biomeVersion": biome_version, "biomeJarSha256": hashlib.sha256(biome_jar.read_bytes()).hexdigest()}
+        if biomes_only:
+            metadata_file = ROOT / "shared/minecraft-assets.json"
+            source_file = ROOT / "panel/src/assets/minecraft/source.json"
+            metadata = json.loads(metadata_file.read_text())
+            metadata.update({"biomes": biome_palette(archive, biome_archive), "biomeVersion": biome_version})
+            source = json.loads(source_file.read_text())
+            source.update(biome_source)
+            metadata_file.write_text(json.dumps(metadata, separators=(",", ":")) + "\n")
+            source_file.write_text(json.dumps(source, indent=2) + "\n")
+            print(json.dumps({**biome_source, "biomes": len(metadata["biomes"])}, indent=2))
+            return
         entries = set(archive.namelist())
 
         def read(name):
@@ -145,40 +200,24 @@ def main(jar):
             if name in ("water", "lava"):
                 value["kind"] = 2 if name == "water" else 0
 
-        colormaps = {name: Image.open(io.BytesIO(archive.read("assets/minecraft/textures/colormap/" + name + ".png"))).convert("RGB") for name in ("grass", "foliage", "dry_foliage") if "assets/minecraft/textures/colormap/" + name + ".png" in entries}
-        colormaps.setdefault("dry_foliage", colormaps["foliage"])
-        def color(value):
-            return int(value.removeprefix("#"), 16) if isinstance(value, str) else value
-        def sample(name, temperature, humidity):
-            x, y = int((1 - temperature) * 255), int((1 - humidity * temperature) * 255)
-            r, g, b = colormaps[name].getpixel((x, y))
-            return (r << 16) | (g << 8) | b
-        biomes = {}
-        for filename in sorted(entries):
-            if not filename.startswith("data/minecraft/worldgen/biome/") or not filename.endswith(".json"):
-                continue
-            biome = read(filename)
-            effects = biome.get("effects", {})
-            temperature = max(0, min(1, biome.get("temperature", 0.8)))
-            humidity = max(0, min(1, biome.get("downfall", 0.4)))
-            grass = color(effects.get("grass_color", sample("grass", temperature, humidity)))
-            if effects.get("grass_color_modifier") == "dark_forest":
-                grass = ((grass & 0xfefefe) + 0x28340a) >> 1
-            elif effects.get("grass_color_modifier") == "swamp":
-                grass = 0x6a7039
-            biomes["minecraft:" + Path(filename).stem] = [grass, color(effects.get("foliage_color", sample("foliage", temperature, humidity))), color(effects.get("water_color", 0x3f76e4)), color(effects.get("dry_foliage_color", sample("dry_foliage", temperature, humidity)))]
+        biomes = biome_palette(archive, biome_archive)
 
         output = ROOT / "panel/src/assets/minecraft"
         output.mkdir(parents=True, exist_ok=True)
         atlas.save(output / "atlas.png", optimize=True)
-        metadata = {"version": read("version.json")["id"], "atlas": {"width": atlas.width, "height": atlas.height, "cell": CELL, "inner": INNER, "padding": PADDING, "columns": COLUMNS}, "textures": textures, "blocks": blocks, "biomes": biomes}
+        metadata = {"version": read("version.json")["id"], "atlas": {"width": atlas.width, "height": atlas.height, "cell": CELL, "inner": INNER, "padding": PADDING, "columns": COLUMNS}, "textures": textures, "blocks": blocks, "biomes": biomes, "biomeVersion": biome_version}
         (ROOT / "shared/minecraft-assets.json").write_text(json.dumps(metadata, separators=(",", ":")) + "\n")
         base_blocks = sum("[" not in name for name in blocks)
-        provenance = {"minecraftVersion": metadata["version"], "jarSha256": hashlib.sha256(jar.read_bytes()).hexdigest(), "atlasSha256": hashlib.sha256((output / "atlas.png").read_bytes()).hexdigest(), "textures": len(textures) - 1, "frames": len(frames), "blocks": base_blocks, "variants": len(blocks) - base_blocks}
+        provenance = {"minecraftVersion": metadata["version"], "jarSha256": hashlib.sha256(jar.read_bytes()).hexdigest(), "atlasSha256": hashlib.sha256((output / "atlas.png").read_bytes()).hexdigest(), "textures": len(textures) - 1, "frames": len(frames), "blocks": base_blocks, "variants": len(blocks) - base_blocks, **biome_source}
         (output / "source.json").write_text(json.dumps(provenance, indent=2) + "\n")
         print(json.dumps(provenance, indent=2))
         print("Atlas:", atlas.size)
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("jar", type=Path)
+    parser.add_argument("--biomes", type=Path, help="Client or bundled server JAR supplying biome definitions")
+    parser.add_argument("--biomes-only", action="store_true", help="Update biome colors without replacing textures or models")
+    args = parser.parse_args()
+    main(args.jar, args.biomes, args.biomes_only)

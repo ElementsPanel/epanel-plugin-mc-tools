@@ -64,7 +64,10 @@ export function bedrockLayer(data: Buffer, y: number): BlockLayer {
     }
     return { name: "air" };
   };
-  return { y, block: index => state(index).name, properties: index => state(index).properties };
+  return { y, block: index => state(index).name, properties: index => state(index).properties, fluid: index => {
+    const packed = ((index & 15) << 8) | (((index >> 4) & 15) << 4) | (index >> 8);
+    return storages.some(storage => /^(?:minecraft:)?(?:flowing_)?water$/.test(storage(packed).name)) ? "minecraft:water" : undefined;
+  } };
 }
 
 export async function bedrockLayers(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {

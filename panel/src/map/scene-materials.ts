@@ -1,10 +1,13 @@
 import { Color, DataTexture, DoubleSide, FloatType, FrontSide, NearestFilter, NearestMipmapLinearFilter, NoColorSpace, RGBAFormat, ShaderMaterial, TextureLoader, Vector2 } from "three";
 import { minecraftAssets, SCENE_KIND_COUNT, SceneKind } from "../../../shared/scene";
+import { minecraftAtlasUrl } from "./minecraft-atlas";
 
 /** Java-style terrain shading: atlas pixels × biome tint × face/vertex lighting. */
 export function sceneMaterials(sky: number, nether: boolean, ready: () => void, failed: () => void) {
-  const atlas = new TextureLoader().load(new URL("../assets/minecraft/atlas.png", import.meta.url).href, ready, undefined, failed);
+  const atlas = new TextureLoader().load(minecraftAtlasUrl(), ready, undefined, failed);
   atlas.colorSpace = NoColorSpace;
+  // Filter/mipmap premultiplied texels so transparent black RGB cannot darken foliage edges.
+  atlas.premultiplyAlpha = true;
   atlas.magFilter = NearestFilter; atlas.minFilter = NearestMipmapLinearFilter;
   const layout = minecraftAssets.atlas;
   const slots = layout.columns * layout.height / layout.cell;
@@ -17,7 +20,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
     uAtlas: { value: atlas }, uAnimation: { value: animation }, uAnimationWidth: { value: width },
     uAtlasSize: { value: new Vector2(layout.width, layout.height) }, uColumns: { value: layout.columns },
     uCell: { value: layout.cell }, uInner: { value: layout.inner }, uPadding: { value: layout.padding },
-    uOverlay: { value: overlay }, uTime: { value: 0 }, uCut: { value: 4096 },
+    uOverlay: { value: overlay }, uTime: { value: 0 }, uCut: { value: 4096 }, uFloor: { value: -4096 },
     uVerticalShade: { value: new Vector2(nether ? 0.9 : 1, nether ? 0.9 : 0.5) },
     uFogColor: { value: new Color(sky).convertLinearToSRGB() }, uFogNear: { value: 96 }, uFogFar: { value: 220 }
   };
@@ -75,6 +78,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       uniform float uOverlay;
       uniform float uTime;
       uniform float uCut;
+      uniform float uFloor;
       uniform vec3 uFogColor;
       uniform float uFogNear;
       uniform float uFogFar;
@@ -101,7 +105,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         return color;
       }
       void main() {
-        if (vHeight > uCut) discard;
+        if (vHeight > uCut || vHeight < uFloor) discard;
         // Differentiate the unwrapped UVs so merged faces keep crisp repeating pixels.
         vec2 du = dFdx(vUv) * uInner / uAtlasSize;
         vec2 dv = dFdy(vUv) * uInner / uAtlasSize;
@@ -109,8 +113,10 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         float mipLimit = min(1.0, 8.0 / max(footprint, 0.001));
         du *= mipLimit; dv *= mipLimit;
         vec4 texel = animatedSprite(vTexture, du, dv);
+        texel.rgb /= max(texel.a, 0.0001);
         if (mod(floor(vFlags / 4.0), 2.0) > 0.5) {
           vec4 grass = sprite(uOverlay, du, dv);
+          grass.rgb /= max(grass.a, 0.0001);
           texel.rgb = mix(texel.rgb, grass.rgb * vTint, grass.a);
         } else texel.rgb *= vTint;
         if (texel.a < 0.1) discard;
@@ -121,7 +127,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
     `,
     transparent: kind === SceneKind.Translucent,
     depthWrite: kind !== SceneKind.Translucent,
-    side: kind === SceneKind.Plant ? DoubleSide : FrontSide,
+    side: kind === SceneKind.Plant || kind === SceneKind.Translucent ? DoubleSide : FrontSide,
     toneMapped: false
   }));
 }

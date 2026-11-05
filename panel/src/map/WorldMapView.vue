@@ -5,7 +5,7 @@ import type { MapWorld, MapViewOptions, PublicMapLinks } from "../../../shared/m
 import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y } from "../../../shared/map";
 import { t } from "../settings";
 import { mapError, publicWorldMapApi, worldMapApi } from "./api";
-import { MapViewport, loadSceneViewport, type MapRenderer, type MapViewState } from "./viewport";
+import { MapViewport, type MapViewState } from "./viewport";
 import { publicMapUrl, mapSettingsUrl } from "./page";
 import MapControls from "./MapControls.vue";
 
@@ -22,7 +22,6 @@ const error = ref("");
 const x = ref(String(props.initialView?.x ?? 0)), z = ref(String(props.initialView?.z ?? 0));
 const mode = ref<"surface" | "slice">(props.initialView?.y === undefined ? "surface" : "slice");
 const renderMode = ref<"2d" | "3d">(props.initialView?.render ?? "2d");
-const preparing = ref(false);
 const height = ref(props.initialView?.y ?? 64);
 const y = ref(String(height.value));
 const heightError = ref("");
@@ -33,7 +32,7 @@ const modes = computed(() => [
   { value: "slice", title: t("MC_MAP_SLICE") }
 ]);
 const state = reactive({ x: 0, z: 0, zoom: 2, loading: 0, warnings: 0, limited: false, empty: false });
-let viewport: MapRenderer | undefined;
+let viewport: MapViewport | undefined;
 let drawing = 0;
 let reading = false;
 let firstLoad = true;
@@ -54,35 +53,22 @@ async function draw(center?: { x: number; z: number }, zoom?: number) {
   const generation = ++drawing;
   viewport?.dispose();
   viewport = undefined;
-  preparing.value = renderMode.value === "3d";
   await nextTick();
-  try {
-    if (generation !== drawing || abort.signal.aborted || !canvas.value || !current.value) return;
-    Object.assign(state, { warnings: 0, loading: 0, limited: false, empty: false });
-    const changed = (value: MapViewState) => {
-      if (generation !== drawing || abort.signal.aborted) return;
-      Object.assign(state, value);
-      if (value.error) {
-        error.value = mapError(value.error);
-        if (renderMode.value === "3d" && value.error instanceof Error && value.error.message === "MC_MAP_WEBGL_UNAVAILABLE") renderMode.value = "2d";
-      }
-    };
-    if (renderMode.value === "3d") {
-      const { SceneViewport } = await loadSceneViewport();
-      if (generation !== drawing || abort.signal.aborted || !canvas.value || !current.value) return;
-      viewport = new SceneViewport(canvas.value, current.value, api.scene, changed, layer.value);
-    } else viewport = new MapViewport(canvas.value, current.value, api.tile, changed, layer.value);
-    if (zoom !== undefined) viewport.camera.zoom = zoom;
-    if (center) viewport.center(center.x, center.z);
-    else { x.value = String(current.value.spawn.x); z.value = String(current.value.spawn.z); }
-  } catch (reason) {
+  if (generation !== drawing || abort.signal.aborted || !canvas.value || !current.value) return;
+  Object.assign(state, { warnings: 0, loading: 0, limited: false, empty: false });
+  const changed = (value: MapViewState) => {
     if (generation !== drawing || abort.signal.aborted) return;
-    error.value = mapError(reason);
-    if (renderMode.value === "3d") {
-      Object.assign(state, center ?? current.value?.spawn, { zoom: zoom ?? state.zoom });
-      renderMode.value = "2d";
+    Object.assign(state, value);
+    if (value.error) {
+      error.value = mapError(value.error);
+      if (value.error instanceof Error && value.error.message === "MC_MAP_WEBGL_UNAVAILABLE") renderMode.value = "2d";
     }
-  } finally { if (generation === drawing) preparing.value = false; }
+  };
+  viewport = new MapViewport(canvas.value, current.value, api.tile, changed, layer.value, api.scene);
+  if (zoom !== undefined) viewport.camera.zoom = zoom;
+  if (center) viewport.center(center.x, center.z);
+  else { x.value = String(current.value.spawn.x); z.value = String(current.value.spawn.z); }
+  viewport.setMode(renderMode.value);
 }
 
 async function load(refresh = false) {
@@ -165,7 +151,7 @@ watch(layer, (value) => {
   viewport?.setLayer(value);
 }, { flush: "sync" });
 watch(selected, () => { if (!loading.value) { error.value = ""; void draw(); } }, { flush: "sync" });
-watch(renderMode, () => { if (!loading.value && current.value) void draw({ x: state.x, z: state.z }, state.zoom); });
+watch(renderMode, value => viewport?.setMode(value));
 watch([() => state.x, () => state.z, () => state.zoom, layer, renderMode], () => emit("view", view()));
 onMounted(() => { void readPublicLinks(); void load(); });
 onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
@@ -208,12 +194,12 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
         <VAlert v-if="error" type="error" density="compact" role="alert">{{ error }}</VAlert>
         <VAlert v-else type="warning" density="compact">{{ t(state.limited ? "MC_MAP_SCENE_LIMIT" : "MC_MAP_PARTIAL") }}</VAlert>
       </div>
-      <VProgressLinear v-if="loading || preparing || state.loading" indeterminate color="primary" class="mc-map-progress" :aria-label="t(renderMode === '3d' ? 'MC_MAP_3D_LOADING' : 'MC_MAP_LOADING')" />
-      <canvas v-if="!loading && current" :key="renderMode" ref="canvas" :data-renderer="renderMode" :aria-label="t(renderMode === '3d' ? 'MC_MAP_3D_SCENE' : 'MC_MAP_TITLE')" :tabindex="renderMode === '3d' ? 0 : undefined" role="img" />
+      <VProgressLinear v-if="loading || state.loading" indeterminate color="primary" class="mc-map-progress" :aria-label="t(renderMode === '3d' ? 'MC_MAP_3D_LOADING' : 'MC_MAP_LOADING')" />
+      <canvas v-if="!loading && current" ref="canvas" :data-renderer="renderMode" :aria-label="t(renderMode === '3d' ? 'MC_MAP_3D_SCENE' : 'MC_MAP_TITLE')" :tabindex="renderMode === '3d' ? 0 : undefined" role="img" />
       <div v-else class="mc-map-empty" role="status">{{ loading ? t("MC_MAP_LOADING") : error ? "" : t("MC_MAP_NO_WORLDS") }}</div>
       <template v-if="current && !loading">
         <VBtn class="mc-map-render-toggle" :width="60" :height="60" :title="t(renderMode === '2d' ? 'MC_MAP_3D_ENTER' : 'MC_MAP_3D_EXIT')" :aria-label="t(renderMode === '2d' ? 'MC_MAP_3D_ENTER' : 'MC_MAP_3D_EXIT')" :aria-pressed="renderMode === '3d'" @click="error = ''; renderMode = renderMode === '2d' ? '3d' : '2d'">{{ renderMode === '2d' ? '3D' : '2D' }}</VBtn>
-        <div v-if="renderMode === '3d' && state.empty && !preparing" class="mc-map-scene-empty" role="status">{{ t("MC_MAP_3D_EMPTY") }}</div>
+        <div v-if="renderMode === '3d' && state.empty" class="mc-map-scene-empty" role="status">{{ t("MC_MAP_3D_EMPTY") }}</div>
         <div class="mc-map-zoom">
           <VBtn variant="text" size="small" min-width="36" :title="t('MC_MAP_ZOOM_IN')" :aria-label="t('MC_MAP_ZOOM_IN')" @click="viewport?.zoom(1.5)">+</VBtn>
           <VBtn variant="text" size="small" min-width="36" :title="t('MC_MAP_ZOOM_OUT')" :aria-label="t('MC_MAP_ZOOM_OUT')" @click="viewport?.zoom(1 / 1.5)">−</VBtn>

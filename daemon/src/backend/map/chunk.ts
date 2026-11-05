@@ -1,4 +1,5 @@
 import { blockColor, isAir, legacyBlockName } from "./colors";
+import { blockFluid } from "./materials";
 
 function unsignedLong(value: any): bigint {
   if (typeof value === "bigint") return BigInt.asUintN(64, value);
@@ -74,7 +75,7 @@ export function chunkLayers(nbt: any, sliceY?: number): BlockLayer[] {
   }).filter(Boolean).sort((a: any, b: any) => b.y - a.y) as BlockLayer[];
 }
 
-export interface BlockLayer { y: number; block(index: number): string; biome?(index: number): string; properties?(index: number): Readonly<Record<string, string>> | undefined }
+export interface BlockLayer { y: number; block(index: number): string; biome?(index: number): string; properties?(index: number): Readonly<Record<string, string>> | undefined; fluid?(index: number): string | undefined }
 
 export function chunkSurface(nbt: any, nether = false, sliceY?: number) {
   return surfaceFromLayers(chunkLayers(nbt, sliceY), nether, sliceY);
@@ -83,6 +84,13 @@ export function chunkSurface(nbt: any, nether = false, sliceY?: number) {
 export function surfaceFromLayers(layers: BlockLayer[], nether = false, sliceY?: number) {
   const colors = new Uint32Array(256);
   const heights = new Int16Array(256).fill(-32768);
+  const record = (column: number, height: number, name: string, layer: BlockLayer, index: number) => {
+    const properties = layer.properties?.(index);
+    const fluid = layer.fluid?.(index) ?? blockFluid(name, properties);
+    if (fluid) name = fluid;
+    colors[column] = blockColor(name);
+    heights[column] = height;
+  };
   if (sliceY !== undefined) {
     const layer = layers.find((item) => item.y === Math.floor(sliceY / 16));
     if (layer) {
@@ -90,8 +98,7 @@ export function surfaceFromLayers(layers: BlockLayer[], nether = false, sliceY?:
       for (let index = 0; index < 256; index++) {
         const name = layer.block(offset + index);
         if (isAir(name)) continue;
-        colors[index] = blockColor(name);
-        heights[index] = sliceY;
+        record(index, sliceY, name, layer, offset + index);
       }
     }
     return { colors, heights };
@@ -108,8 +115,7 @@ export function surfaceFromLayers(layers: BlockLayer[], nether = false, sliceY?:
         lastY = height;
         if (isAir(name)) { open = true; continue; }
         if (!open) continue;
-        colors[z * 16 + x] = blockColor(name);
-        heights[z * 16 + x] = height;
+        record(z * 16 + x, height, name, layer, y * 256 + z * 16 + x);
         break search;
       }
     }

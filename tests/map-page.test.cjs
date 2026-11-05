@@ -100,71 +100,56 @@ test("map links preserve a panel subpath and layer zero without private identifi
 
 function sceneViewer(t, options = {}) {
   const renderers = [], views = [], scene = () => {}, tile = () => {};
-  const renderer = kind => class {
-    constructor(canvas, world, load, changed, layer) {
-      Object.assign(this, { kind, camera: { ...world.spawn, zoom: 2 }, load, changed, layer }); renderers.push(this);
-    }
-    center(x, z) { Object.assign(this.camera, { x, z }); this.changed({ ...this.camera, loading: 0, warnings: 0 }); }
-    setLayer(value) { this.layer = value; }
-    dispose() { this.disposed = true; }
-  };
-  const SceneViewport = options.SceneViewport || renderer("3d");
   const f = mount(t, component("WorldMapView.vue", {
     "./api": { mapError: error => error.message, worldMapApi: () => assert.fail("public scene used private API"),
       publicWorldMapApi: () => ({ worlds: async () => [terrain("survival")], tile, scene }) },
-    "./viewport": { MapViewport: renderer("2d"), loadSceneViewport: options.load || (async () => ({ SceneViewport })) }
+    "./viewport": { MapViewport: class {
+      constructor(canvas, world, load, changed, layer, loadScene) {
+        Object.assign(this, { canvas, camera: { ...world.spawn, zoom: 2 }, load, changed, layer, loadScene }); renderers.push(this);
+      }
+      setMode(kind) { this.kind = kind; }
+      center(x, z) {
+        Object.assign(this.camera, { x, z });
+        this.changed({ ...this.camera, x: Math.round(x), z: Math.round(z), loading: 0, warnings: 0 });
+      }
+      setLayer(value) { this.layer = value; }
+      dispose() { this.disposed = true; }
+    } }
   }), { publicMap: "survival", initialView: { x: 48, z: -32, zoom: 3, y: 0, render: options.render }, onView: value => views.push(value) });
   f.view.canvas = {};
-  return { ...f, renderers, views, scene, tile, SceneViewport };
+  return { ...f, renderers, views, scene, tile };
 }
 
-test("3D shared views use scene data and retain coordinates, zoom and slices across renderer switches and refresh", async t => {
+test("shared views pass both map APIs to one persistent viewport and retain coordinates, zoom and slices across projection switches", async t => {
   const f = sceneViewer(t, { render: "3d" }); await tick();
-  let active = f.renderers.at(-1);
-  assert.equal(active.kind, "3d"); assert.equal(active.load, f.scene); assert.equal(active.layer, 0);
-  assert.deepEqual(active.camera, { x: 48, z: -32, zoom: 3 });
-  active.camera.zoom = 5; active.center(80, -96);
-  f.view.renderMode = "2d"; await tick();
-  assert.equal(active.disposed, true); active = f.renderers.at(-1);
-  assert.equal(active.kind, "2d"); assert.equal(active.load, f.tile);
-  assert.deepEqual(active.camera, { x: 80, z: -96, zoom: 5 });
-  f.view.renderMode = "3d"; await tick();
-  f.view.height = -16; await tick();
-  assert.equal(f.renderers.at(-1).layer, -16);
-  await f.view.load(true); await tick(); active = f.renderers.at(-1);
-  assert.equal(active.kind, "3d"); assert.equal(active.layer, -16);
-  assert.deepEqual(active.camera, { x: 80, z: -96, zoom: 5 });
+  const active = f.renderers[0];
+  assert.equal(active.kind, "3d"); assert.equal(active.load, f.tile); assert.equal(active.loadScene, f.scene);
+  assert.equal(active.layer, 0); assert.deepEqual(active.camera, { x: 48, z: -32, zoom: 3 });
+  active.camera.zoom = 5; active.center(80.375, -96.125);
+  for (const kind of ["2d", "3d", "2d", "3d"]) {
+    f.view.renderMode = kind; await tick();
+    assert.equal(f.renderers.length, 1); assert.equal(active.disposed, undefined); assert.equal(active.kind, kind);
+    assert.deepEqual(active.camera, { x: 80.375, z: -96.125, zoom: 5 });
+  }
+  f.view.height = -16; await tick(); assert.equal(active.layer, -16);
+  await f.view.load(true); await tick();
+  const refreshed = f.renderers.at(-1);
+  assert.equal(f.renderers.length, 2); assert.equal(active.disposed, true);
+  assert.equal(refreshed.kind, "3d"); assert.equal(refreshed.layer, -16);
   assert.deepEqual(f.views.at(-1), { x: 80, z: -96, zoom: 5, y: -16, render: "3d" });
   f.close(); assert(f.renderers.every(renderer => renderer.disposed));
 });
 
-test("late 3D module imports cannot replace a newer 2D view or revive an unmounted map", async t => {
-  const gates = [];
-  const f = sceneViewer(t, { load: () => { const gate = deferred(); gates.push(gate); return gate.promise; } });
-  await tick();
-  f.view.renderMode = "3d"; await tick();
-  assert.equal(f.view.preparing, true);
-  f.view.renderMode = "2d"; await tick();
-  gates[0].resolve({ SceneViewport: f.SceneViewport }); await tick();
-  assert.equal(f.renderers.length, 2); assert(f.renderers.every(renderer => renderer.kind === "2d"));
-  f.view.renderMode = "3d"; await tick(); f.close();
-  gates[1].resolve({ SceneViewport: f.SceneViewport }); await tick();
-  assert.equal(f.renderers.length, 2);
-});
-
-test("WebGL creation failures and context loss return to a usable 2D map without losing the selected view", async t => {
-  const failed = sceneViewer(t, { render: "3d", SceneViewport: class { constructor() { throw new Error("MC_MAP_WEBGL_UNAVAILABLE"); } } });
-  await tick(); await tick();
-  assert.equal(failed.view.renderMode, "2d");
-  assert.equal(failed.view.error, "MC_MAP_WEBGL_UNAVAILABLE");
-  assert.deepEqual(failed.renderers.at(-1).camera, { x: 48, z: -32, zoom: 3 });
-  const lost = sceneViewer(t, { render: "3d" }); await tick();
-  const active = lost.renderers.at(-1);
+test("WebGL failure returns the existing viewport to 2D without recreating its map or losing the view", async t => {
+  const f = sceneViewer(t, { render: "3d" }); await tick();
+  const active = f.renderers[0];
+  active.camera.zoom = 4; active.center(80.375, -96.125);
   active.changed({ x: 80, z: -96, zoom: 4, loading: 0, warnings: 0, error: new Error("MC_MAP_WEBGL_UNAVAILABLE") });
   await tick();
-  assert.equal(active.disposed, true); assert.equal(lost.view.renderMode, "2d");
-  assert.deepEqual(lost.renderers.at(-1).camera, { x: 80, z: -96, zoom: 4 });
-  assert.equal(lost.renderers.at(-1).layer, 0);
+  assert.equal(f.renderers.length, 1); assert.equal(active.disposed, undefined);
+  assert.equal(f.view.renderMode, "2d"); assert.equal(active.kind, "2d");
+  assert.equal(f.view.error, "MC_MAP_WEBGL_UNAVAILABLE"); assert.equal(active.layer, 0);
+  assert.deepEqual(active.camera, { x: 80.375, z: -96.125, zoom: 4 });
 });
 
 test("standalone maps register an anonymous immersive route and an administrator-only settings route", () => {
@@ -187,6 +172,7 @@ test("the public map viewer restores shared position, zoom and Y=0, emits update
     "./viewport": { MapViewport: class {
       constructor(canvas, world, tile, changed, layer) { this.camera = { ...world.spawn, zoom: 2 }; this.changed = changed; this.layer = layer; renderers.push(this); }
       center(x, z) { Object.assign(this.camera, { x, z }); this.changed(this.camera); }
+      setMode() {}
       setLayer(y) { this.layer = y; }
       dispose() { this.disposed = true; }
     } }

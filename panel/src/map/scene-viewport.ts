@@ -1,9 +1,12 @@
-import { BufferAttribute, Color, Fog, Group, InstancedBufferAttribute, InstancedBufferGeometry, Mesh, MeshBasicMaterial, OctahedronGeometry, PerspectiveCamera, Scene, Sphere, Vector3, WebGLRenderer } from "three";
+import { BufferAttribute, Color, Group, InstancedBufferAttribute, InstancedBufferGeometry, Matrix4, Mesh, MeshBasicMaterial, OctahedronGeometry, OrthographicCamera, PerspectiveCamera, Scene, Sphere, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { MAP_LIMIT, MAP_SCENE_SIZE, mapHeight, type MapSceneTile, type MapWorld } from "../../../shared/map";
+import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y, MAP_SCENE_SIZE, mapHeight, type MapSceneTile, type MapWorld } from "../../../shared/map";
 import type { Camera, MapRenderer, MapViewState } from "./viewport";
 import { decodeScene } from "./scene-codec";
 import { sceneMaterials } from "./scene-materials";
+import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjection } from "./perspective-transition";
+import { SceneKind } from "../../../shared/scene";
+import { sortTransparentFaces } from "./scene-transparency";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000;
 const tileKey = (x: number, z: number, y?: number) => `${y ?? "surface"}:${x}:${z}`;
@@ -20,10 +23,24 @@ export function visibleSceneTiles(camera: Camera) {
   return tiles.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
 }
 
+export function visibleTopDownTiles(camera: Camera, width: number, height: number) {
+  const halfWidth = width / camera.zoom / 2, halfHeight = height / camera.zoom / 2;
+  const limit = Math.ceil(MAP_LIMIT / SIZE), tiles: { x: number; z: number; position: string }[] = [];
+  for (let z = Math.max(-limit, Math.floor((camera.z - halfHeight) / SIZE)); z <= Math.min(limit, Math.floor((camera.z + halfHeight) / SIZE)); z++) {
+    for (let x = Math.max(-limit, Math.floor((camera.x - halfWidth) / SIZE)); x <= Math.min(limit, Math.floor((camera.x + halfWidth) / SIZE)); x++) tiles.push({ x, z, position: `${x}:${z}` });
+  }
+  return tiles.sort((a, b) => Math.hypot((a.x + .5) * SIZE - camera.x, (a.z + .5) * SIZE - camera.z) - Math.hypot((b.x + .5) * SIZE - camera.x, (b.z + .5) * SIZE - camera.z));
+}
+
 export class SceneViewport implements MapRenderer {
   readonly camera: Camera = { x: 0, z: 0, zoom: 2 };
   private readonly scene = new Scene();
-  private readonly viewCamera = new PerspectiveCamera(55, 1, 0.1, 600);
+  private readonly viewCamera = new PerspectiveCamera(MAP_FOV, 1, 0.1, 600);
+  private readonly topCamera = new OrthographicCamera(-1, 1, 1, -1, .1, MAP_MAX_Y - MAP_MIN_Y + 128);
+  private topZoom = 2;
+  private width = 1;
+  private height = 1;
+  private pixelRatio = 0;
   private readonly renderer: WebGLRenderer;
   private readonly controls: OrbitControls;
   private readonly materials: ReturnType<typeof sceneMaterials>;
@@ -43,6 +60,12 @@ export class SceneViewport implements MapRenderer {
   private animationTimer?: ReturnType<typeof setTimeout>;
   private lost = false;
   private error?: unknown;
+  private atlasReady = false;
+  private active = true;
+  private blend: number;
+  private orbit = { polar: Math.acos(1 / Math.sqrt(3)), azimuth: Math.PI / 4 };
+  private transition?: { from: number; to: number; startedAt: number };
+  private readonly sky: Color;
   private readonly reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   constructor(
@@ -50,40 +73,85 @@ export class SceneViewport implements MapRenderer {
     private readonly world: MapWorld,
     private readonly load: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapSceneTile>,
     private readonly changed: (state: MapViewState) => void,
-    private sliceY?: number
+    private sliceY?: number,
+    private projection: "perspective" | "orthographic" = "perspective",
+    private readonly inputCanvas = canvas
   ) {
     mapHeight(sliceY);
-    try { this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" }); }
+    this.blend = this.topDown ? 0 : 1;
+    try { this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" }); }
     catch { throw new Error("MC_MAP_WEBGL_UNAVAILABLE"); }
     const nether = world.dimension === "minecraft:the_nether", end = world.dimension === "minecraft:the_end";
     const sky = nether ? 0x482728 : end ? 0x242036 : 0xbad8f3;
-    this.materials = sceneMaterials(sky, nether, this.schedule, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
-    this.scene.background = new Color(sky);
-    this.scene.fog = new Fog(sky, 90, 235);
+    this.sky = new Color(sky);
+    this.materials = sceneMaterials(sky, nether, () => { this.atlasReady = true; this.schedule(); }, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
     this.scene.add(this.marker);
     this.origin = { x: Math.floor(world.spawn.x / SIZE) * SIZE, z: Math.floor(world.spawn.z / SIZE) * SIZE };
     const target = new Vector3(world.spawn.x - this.origin.x, Math.min(sliceY ?? 64, 64) + 2, world.spawn.z - this.origin.z);
     this.viewCamera.position.copy(target).add(new Vector3(46, 46, 46).setLength(80));
-    this.controls = new OrbitControls(this.viewCamera, canvas);
+    this.controls = new OrbitControls(this.viewCamera, inputCanvas);
     this.controls.target.copy(target);
     this.controls.minDistance = 160 / 12; this.controls.maxDistance = 160;
     this.controls.minPolarAngle = 0.08; this.controls.maxPolarAngle = Math.PI / 2 - 0.08;
     this.controls.screenSpacePanning = false;
     this.controls.enableDamping = !this.reducedMotion; this.controls.dampingFactor = 0.16;
     this.controls.rotateSpeed = 0.65; this.controls.panSpeed = 0.85;
-    this.controls.listenToKeyEvents(canvas);
+    this.controls.enabled = !this.topDown;
+    this.controls.listenToKeyEvents(inputCanvas);
     this.controls.addEventListener("change", this.schedule);
     this.camera.x = world.spawn.x; this.camera.z = world.spawn.z;
     Object.defineProperty(this.camera, "zoom", { enumerable: true,
-      get: () => Math.max(1, Math.min(12, 160 / this.controls.getDistance())),
+      get: () => this.topDown || this.transition ? this.topZoom : Math.max(1, Math.min(12, 160 / this.controls.getDistance())),
       set: (zoom: number) => this.setZoom(zoom)
     });
     this.controls.update();
     this.updateClipping();
-    canvas.addEventListener("pointerdown", this.focus);
+    inputCanvas.addEventListener("pointerdown", this.focus);
     canvas.addEventListener("webglcontextlost", this.contextLost);
-    this.observer = new ResizeObserver(this.resize); this.observer.observe(canvas);
-    this.resize();
+    this.observer = new ResizeObserver(this.resize);
+    if (inputCanvas === canvas) { this.observer.observe(canvas); this.resize(); }
+  }
+
+  private get topDown() { return this.projection === "orthographic"; }
+  get ready() { return this.atlasReady && !this.lost && !this.abort.signal.aborted; }
+  get isTransitioning() { return !!this.transition; }
+  get frameView() { return { camera: { ...this.camera }, width: this.width, height: this.height, orthographic: this.topDown && !this.transition }; }
+
+  setProjection(projection: "perspective" | "orthographic") {
+    if (this.abort.signal.aborted || projection === this.projection) return;
+    this.advanceTransition();
+    // Clear an unfinished drag and its inertia without moving the current camera.
+    const position = this.viewCamera.position.clone(), target = this.controls.target.clone(), rotation = this.viewCamera.quaternion.clone();
+    const damping = this.controls.enableDamping;
+    this.controls.enableDamping = false; this.controls.update(); this.controls.enableDamping = damping;
+    this.viewCamera.position.copy(position); this.controls.target.copy(target); this.viewCamera.quaternion.copy(rotation);
+    this.controls.disconnect(); this.controls.connect(this.inputCanvas); this.controls.listenToKeyEvents(this.inputCanvas);
+    this.camera.x = clamp(target.x + this.origin.x); this.camera.z = clamp(target.z + this.origin.z);
+    if (!this.topDown && !this.transition) {
+      this.topZoom = this.camera.zoom;
+      const offset = this.viewCamera.position.clone().sub(this.controls.target);
+      this.orbit = { polar: Math.acos(offset.y / offset.length()), azimuth: Math.atan2(offset.x, offset.z) };
+    } else if (!this.transition) {
+      this.controls.target.y = (this.elevation(this.camera.x, this.camera.z) ?? this.controls.target.y - 2) + 2;
+    }
+    this.projection = projection;
+    this.transition = { from: this.blend, to: this.topDown ? 0 : 1, startedAt: performance.now() };
+    this.controls.enabled = false;
+    this.updateClipping(); this.schedule();
+  }
+
+  setActive(active: boolean) {
+    if (this.active === active || this.abort.signal.aborted) return;
+    this.active = active;
+    if (active) this.schedule();
+    else { cancelAnimationFrame(this.frame); this.frame = 0; clearTimeout(this.animationTimer); }
+  }
+
+  setTopDownView(camera: Camera, width: number, height: number) {
+    if (!this.topDown || this.abort.signal.aborted || width <= 0 || height <= 0) return;
+    this.setSize(width, height);
+    if (camera.zoom !== this.topZoom) this.setZoom(camera.zoom);
+    if (camera.x !== this.camera.x || camera.z !== this.camera.z) this.center(camera.x, camera.z);
   }
 
   center(x: number, z: number) {
@@ -108,9 +176,10 @@ export class SceneViewport implements MapRenderer {
   dispose() {
     if (this.abort.signal.aborted) return;
     this.abort.abort(); cancelAnimationFrame(this.frame); this.frame = 0;
+    this.transition = undefined;
     clearTimeout(this.animationTimer);
     this.observer.disconnect(); this.controls.removeEventListener("change", this.schedule); this.controls.dispose();
-    this.canvas.removeEventListener("pointerdown", this.focus);
+    this.inputCanvas.removeEventListener("pointerdown", this.focus);
     this.canvas.removeEventListener("webglcontextlost", this.contextLost);
     for (const tile of [...this.cache.values()]) this.remove(tile);
     this.displayed.clear(); this.pending.clear(); this.failed.clear(); this.skipped.clear();
@@ -122,6 +191,7 @@ export class SceneViewport implements MapRenderer {
 
   private setZoom(value: number) {
     if (!Number.isFinite(value) || this.abort.signal.aborted) return;
+    if (this.topDown || this.transition) { this.topZoom = Math.max(1, Math.min(12, value)); this.schedule(); return; }
     const offset = this.viewCamera.position.clone().sub(this.controls.target).setLength(160 / Math.max(1, Math.min(12, value)));
     this.viewCamera.position.copy(this.controls.target).add(offset);
     this.controls.update(); this.schedule();
@@ -129,23 +199,30 @@ export class SceneViewport implements MapRenderer {
 
   private updateClipping() {
     this.materials[0].uniforms.uCut.value = this.sliceY === undefined ? 4096 : this.sliceY + 1.001;
+    this.materials[0].uniforms.uFloor.value = this.topDown && !this.transition && this.sliceY !== undefined ? this.sliceY + .001 : -4096;
   }
 
-  private focus = () => this.canvas.focus({ preventScroll: true });
+  private focus = () => { if (!this.topDown) this.inputCanvas.focus({ preventScroll: true }); };
   private contextLost = (event: Event) => {
     event.preventDefault(); this.lost = true; cancelAnimationFrame(this.frame); this.frame = 0;
     clearTimeout(this.animationTimer);
     this.changed({ ...this.camera, loading: 0, warnings: 0, error: new Error("MC_MAP_WEBGL_UNAVAILABLE") });
   };
-  private resize = () => {
-    const bounds = this.canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height || this.abort.signal.aborted) return;
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-    this.renderer.setSize(bounds.width, bounds.height, false);
-    this.viewCamera.aspect = bounds.width / bounds.height; this.viewCamera.updateProjectionMatrix(); this.schedule();
+  private resize = (entries: ResizeObserverEntry[] = []) => {
+    const size = entries.find(entry => entry.target === this.canvas)?.contentRect;
+    this.setSize(size?.width ?? this.canvas.clientWidth, size?.height ?? this.canvas.clientHeight);
   };
+  setSize(width: number, height: number) {
+    const ratio = Math.min(devicePixelRatio || 1, 2);
+    if (this.abort.signal.aborted || width <= 0 || height <= 0 || this.width === width && this.height === height && this.pixelRatio === ratio) return;
+    this.width = width; this.height = height; this.pixelRatio = ratio;
+    // Use the same rounded buffer dimensions as the 2D layers. Explicit physical
+    // sizes avoid Three flooring the buffer but rounding the viewport at fractional DPR.
+    this.renderer.setSize(Math.round(width * ratio), Math.round(height * ratio), false);
+    this.viewCamera.aspect = width / height; this.viewCamera.updateProjectionMatrix(); this.schedule();
+  }
   private schedule = () => {
-    if (this.abort.signal.aborted || this.frame || this.lost) return;
+    if (this.abort.signal.aborted || this.frame || this.lost || !this.active) return;
     this.frame = requestAnimationFrame(() => { this.frame = 0; this.draw(); });
   };
 
@@ -167,11 +244,16 @@ export class SceneViewport implements MapRenderer {
 
   private draw() {
     clearTimeout(this.animationTimer);
-    this.controls.update();
+    if (!this.transition && !this.topDown) this.controls.update();
     const x = clamp(this.controls.target.x + this.origin.x), z = clamp(this.controls.target.z + this.origin.z);
     if (x !== this.controls.target.x + this.origin.x || z !== this.controls.target.z + this.origin.z) this.center(x, z);
     this.camera.x = x; this.camera.z = z; this.rebase();
-    const tiles = visibleSceneTiles(this.camera);
+    let tiles = this.topDown ? visibleTopDownTiles(this.camera, this.width, this.height) : visibleSceneTiles(this.camera);
+    if (this.transition) {
+      // Keep both endpoint footprints in the same scene throughout a projection change.
+      const coverage = new Map([...visibleTopDownTiles(this.camera, this.width, this.height), ...visibleSceneTiles(this.camera)].map(tile => [tile.position, tile]));
+      tiles = [...coverage.values()].sort((a, b) => this.distance(a) - this.distance(b));
+    }
     const anchor = `${Math.floor(x / SIZE)}:${Math.floor(z / SIZE)}:${tiles.length}`;
     if (this.anchor !== anchor) { this.anchor = anchor; this.skipped.clear(); this.failed.clear(); }
     this.visible = new Set(tiles.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
@@ -189,17 +271,40 @@ export class SceneViewport implements MapRenderer {
     }
     const ground = this.elevation(x, z);
     let settling = false;
-    if (ground !== undefined) {
+    if (ground !== undefined && !this.topDown && !this.transition) {
       const remaining = ground + 2 - this.controls.target.y;
       const delta = this.reducedMotion || Math.abs(remaining) < 0.05 ? remaining : remaining * 0.25;
       this.controls.target.y += delta; this.viewCamera.position.y += delta;
       settling = Math.abs(remaining) >= 0.05 && !this.reducedMotion;
     }
     const spawn = this.elevation(this.world.spawn.x, this.world.spawn.z);
-    this.marker.visible = spawn !== undefined;
+    this.marker.visible = spawn !== undefined && !this.transition && !this.topDown;
     if (spawn !== undefined) this.marker.position.set(this.world.spawn.x - this.origin.x + 0.5, spawn + 3.5, this.world.spawn.z - this.origin.z + 0.5);
     this.materials[0].uniforms.uTime.value = performance.now() / 1000;
-    this.renderer.render(this.scene, this.viewCamera);
+    const transitioning = this.advanceTransition();
+    this.marker.visible = spawn !== undefined && !this.transition && !this.topDown;
+    const orthographic = this.topDown && !this.transition;
+    this.scene.background = orthographic ? null : this.sky;
+    const fogScale = this.blend === 1 ? 1 : 1 / Math.max(.0001, this.blend ** 8);
+    this.materials[0].uniforms.uFogNear.value = 96 * fogScale;
+    this.materials[0].uniforms.uFogFar.value = 220 * fogScale;
+    if (orthographic) {
+      this.topCamera.left = -this.width / this.topZoom / 2; this.topCamera.right = -this.topCamera.left;
+      this.topCamera.top = this.height / this.topZoom / 2; this.topCamera.bottom = -this.topCamera.top;
+      this.topCamera.position.set(this.controls.target.x, MAP_MAX_Y + 64, this.controls.target.z);
+      this.topCamera.up.set(0, 0, -1);
+      this.topCamera.lookAt(this.controls.target.x, MAP_MIN_Y, this.controls.target.z);
+      this.topCamera.updateProjectionMatrix();
+    }
+    const activeCamera = orthographic ? this.topCamera : this.viewCamera;
+    activeCamera.updateMatrixWorld(); this.scene.updateMatrixWorld();
+    const transform = new Matrix4();
+    for (const tile of this.displayed.values()) for (const child of tile.group.children) {
+      const mesh = child as Mesh<InstancedBufferGeometry>;
+      if (mesh.material === this.materials[SceneKind.Translucent]) sortTransparentFaces(mesh.geometry,
+        transform.multiplyMatrices(activeCamera.matrixWorldInverse, mesh.matrixWorld));
+    }
+    this.renderer.render(this.scene, activeCamera);
     const needed = tiles.filter(tile => {
       const key = tileKey(tile.x, tile.z, this.sliceY);
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key) && !this.skipped.has(key);
@@ -207,14 +312,45 @@ export class SceneViewport implements MapRenderer {
     const loading = needed.length + this.pending.size;
     this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 2 - this.pending.size))) void this.fetch(item);
-    if (settling) this.schedule();
-    if (animated && !this.reducedMotion) this.animationTimer = setTimeout(this.schedule, 50);
+    if (settling || transitioning) this.schedule();
+    if (this.transition || animated && !this.reducedMotion) this.animationTimer = setTimeout(this.schedule, 50);
+  }
+
+  private advanceTransition() {
+    const transition = this.transition;
+    if (!transition) return false;
+    const duration = Math.max(1, PERSPECTIVE_TRANSITION_MS * Math.abs(transition.to - transition.from));
+    const progress = this.reducedMotion ? 1 : Math.min(1, (performance.now() - transition.startedAt) / duration);
+    this.blend = transition.from + (transition.to - transition.from) * progress;
+    const target = this.controls.target;
+    const pose = transitionPose(this.height, this.topZoom, this.blend, MAP_MAX_Y + 64 - target.y, this.orbit);
+    this.viewCamera.position.copy(target).add(new Vector3(Math.sin(pose.polar) * Math.sin(pose.azimuth), Math.cos(pose.polar), Math.sin(pose.polar) * Math.cos(pose.azimuth)).multiplyScalar(pose.distance));
+    // At the top-down endpoint, -Z is screen-up just as it is in the 2D canvas.
+    this.viewCamera.up.set(0, pose.progress, -(1 - pose.progress));
+    this.viewCamera.lookAt(target);
+    // Match both projections' scale at the target while the camera descends from above the world's height limit.
+    this.viewCamera.fov = 2 * Math.atan(pose.halfHeight / pose.distance) * 180 / Math.PI;
+    this.viewCamera.far = Math.max(600, pose.distance + target.y - MAP_MIN_Y + 128);
+    this.viewCamera.updateProjectionMatrix();
+    this.viewCamera.projectionMatrix.copy(transitionProjection(this.viewCamera.projectionMatrix, this.viewCamera.aspect, this.viewCamera.near, this.viewCamera.far, pose));
+    this.viewCamera.projectionMatrixInverse.copy(this.viewCamera.projectionMatrix).invert();
+    if (progress >= 1) {
+      this.transition = undefined;
+      this.controls.enabled = !this.topDown;
+      this.updateClipping();
+      if (!this.topDown) {
+        this.viewCamera.up.set(0, 1, 0); this.viewCamera.fov = MAP_FOV; this.viewCamera.far = 600; this.viewCamera.updateProjectionMatrix();
+        this.controls.update();
+      }
+    }
+    return progress < 1;
   }
 
   private distance(tile: { x: number; z: number }) { return Math.hypot((tile.x + 0.5) * SIZE - this.camera.x, (tile.z + 0.5) * SIZE - this.camera.z); }
 
   private room(count: number, incoming: { x: number; z: number }) {
-    while (this.cache.size >= 80 || this.faces + count > MAX_FACES) {
+    const maxTiles = 256;
+    while (this.cache.size >= maxTiles || this.faces + count > MAX_FACES) {
       const candidates = [...this.cache.values()].sort((a, b) => Number(this.visible.has(a.key)) - Number(this.visible.has(b.key)) || this.distance(b) - this.distance(a));
       const oldest = candidates[0];
       if (!oldest || this.visible.has(oldest.key) && this.distance(oldest) <= this.distance(incoming)) return false;

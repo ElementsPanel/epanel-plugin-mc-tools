@@ -8,6 +8,7 @@ export const SCENE_GROUND = 16;
 export interface MinecraftBlock { faces: number[]; tint: number; overlay: number; kind: SceneKind; shape?: "ground" | "cross" }
 export const minecraftAssets = data as unknown as {
   version: string;
+  biomeVersion: string;
   atlas: { width: number; height: number; cell: number; inner: number; padding: number; columns: number };
   textures: [name: string, firstFrame: number, frames: number, frameTime: number, interpolate: boolean][];
   blocks: Record<string, MinecraftBlock>;
