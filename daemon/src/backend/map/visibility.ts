@@ -38,10 +38,11 @@ interface Entry {
   onExit(): void;
 }
 
-/** Chat reaches the console as `<Player> text`; unsigned 1.19+ messages add `[Not Secure]`. */
+/** Chat reaches the console as `<Player> text`, optionally behind log prefixes and `[Not Secure]`. */
 export function mapCommand(text: string) {
   if (!text.includes("$mapos")) return;
-  const match = consoleLine(text).match(/^(?:\[Not Secure\]\s*)?<([\p{L}\p{N}_.-]{1,32})>\s*\$mapos\s+(on|off)\s*$/iu);
+  const match = consoleLine(text)
+    .match(/^(?:\[[^\]\r\n]{0,120}\]\s*:?\s*){0,4}<([\p{L}\p{N}_.-]{1,32})>\s*\$mapos\s+(on|off)\s*$/iu);
   return match ? { name: match[1], hidden: match[2].toLowerCase() === "off" } : undefined;
 }
 

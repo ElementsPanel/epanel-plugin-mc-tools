@@ -41,8 +41,17 @@ test("only a complete $-prefixed chat line counts as a map visibility command", 
   assert.deepEqual(mapCommand("[12:00:00] [Server thread/INFO]: <Steve> $mapos off"), { name: "Steve", hidden: true });
   assert.deepEqual(mapCommand("[12:00:00] [Server thread/INFO]: [Not Secure] <Alex_1> $mapos ON"), { name: "Alex_1", hidden: false });
   assert.deepEqual(mapCommand("[12:00:00] [Async Chat Thread - #0/INFO]: <Player.one> $mapos  off  "), { name: "Player.one", hidden: true });
+  // Spigot, Paper and Velocity merge the level into the time bracket.
+  assert.deepEqual(mapCommand("[20:50:45 INFO]: [Not Secure] <ress2338396> $mapos off"), { name: "ress2338396", hidden: true });
+  assert.deepEqual(mapCommand("[20:50:45 INFO]: <Steve> $mapos on"), { name: "Steve", hidden: false });
+  assert.deepEqual(mapCommand("[20:50:45 WARN]: <Steve> $mapos off\n"), { name: "Steve", hidden: true });
+  // Forge and NeoForge prepend their own date and logger brackets.
+  assert.deepEqual(mapCommand("[06Nov2026 20:51:01.533] [Server thread/INFO] [minecraft/DedicatedServer]: <Steve> $mapos off"),
+    { name: "Steve", hidden: true });
+  assert.deepEqual(mapCommand("§8[20:51:01 INFO]: §f<Steve> §7$mapos off"), { name: "Steve", hidden: true });
   for (const line of ["<Steve> hello", "<Steve> $mapos maybe", "<Steve> $mapos off please", "<Steve> $maposoff",
-    "<> $mapos off", "$mapos off", "Steve issued server command: /$mapos off", "<Steve> $mapos off; stop"]) {
+    "<> $mapos off", "$mapos off", "Steve issued server command: /$mapos off", "<Steve> $mapos off; stop",
+    "<Steve> someone said [x] <Alex> $mapos off", "[20:50:45 INFO]: said <Steve> $mapos off", "[20:50:45 INFO]: <Steve> said $mapos off"]) {
     assert.equal(mapCommand(line), undefined, line);
   }
 });

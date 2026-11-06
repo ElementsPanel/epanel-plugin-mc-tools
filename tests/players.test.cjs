@@ -290,3 +290,18 @@ test("daemon player protocol hides filesystem errors, rejects proxies and remove
   assert.equal((await request("mc-tools/players/list", { instanceUuid: "server" })).error.message, "MC_PLAYERS_READ_FAILED");
   for (const dispose of disposals) await dispose();
 });
+
+test("console lines drop the log prefix of every server flavour before parsing", () => {
+  const { consoleLine } = load("daemon/src/backend/players/console.ts");
+  for (const line of [
+    "[20:50:45 INFO]: Kicked Steve",
+    "[20:50:45] [Server thread/INFO]: Kicked Steve",
+    "[20:50:45 WARN]: Kicked Steve",
+    "[06Nov2026 20:51:01.533] [Server thread/INFO] [minecraft/DedicatedServer]: Kicked Steve",
+    "§8[20:51:01 INFO]: §fKicked Steve"
+  ]) {
+    assert.equal(consoleLine(line), "Kicked Steve", line);
+  }
+  assert.equal(consoleLine("[20:50:45 INFO]: [Not Secure] <Steve> $mapos off"), "[Not Secure] <Steve> $mapos off");
+  assert.equal(consoleLine("Kicked Steve"), "Kicked Steve");
+});

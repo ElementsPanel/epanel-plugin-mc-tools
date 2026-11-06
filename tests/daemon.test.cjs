@@ -198,3 +198,9 @@ test("Cordis dependency removal unloads the external plugin and clears restored 
   assert.equal(value.lifeCycleTaskManager.lifeCycleTask.length, 0);
   assert.equal(value.info.currentPlayers, 0);
 });
+
+test("the daemon plugin declares storage as an optional dependency instead of accessing it unregistered", () => {
+  const { inject } = loader()("daemon/src/backend/index.ts");
+  assert.deepEqual(inject.required, ["instances", "presets", "instanceLifecycle", "features", "protocol"]);
+  assert.deepEqual(inject.optional, ["storage"], "cordis warns on any service that is neither required nor optional");
+});

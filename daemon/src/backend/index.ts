@@ -3,7 +3,8 @@ import { registerMinecraftStatus } from "./mcstats";
 import { registerWorldMap } from "./map";
 import { registerPlayerManagement } from "./players";
 
-export const inject = ["instances", "presets", "instanceLifecycle", "features", "protocol"];
+// Storage only holds the `$mapos` choice, so a host without it keeps every map working.
+export const inject = { required: ["instances", "presets", "instanceLifecycle", "features", "protocol"], optional: ["storage"] };
 
 export function apply(ctx: McToolsDaemonContext) {
   registerMinecraftStatus(ctx);

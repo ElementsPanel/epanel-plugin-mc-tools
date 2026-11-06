@@ -144,7 +144,7 @@ export class MapPlayerService {
     const instance = this.instances.getInstance(id) as Instance | undefined;
     if (!instance) return;
     const text = hidden ? "地图显示已关闭，输入 $mapos on 可恢复" : "地图显示已开启，输入 $mapos off 可关闭";
-    const command = `tellraw ${name} ${JSON.stringify([{ text: "[MapOS] ", color: "gold" }, { text, color: "gray" }])}`;
+    const command = `tellraw ${name} ${JSON.stringify([{ text: "[Map] ", color: "gold" }, { text, color: "gray" }])}`;
     try {
       const root = await fs.realpath(instance.absoluteCwdPath());
       const target = await javaRconConfiguration(root, instance.config.pingConfig?.ip);

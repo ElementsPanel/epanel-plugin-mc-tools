@@ -11,7 +11,9 @@ export interface PlayerCommandInstance {
 export function consoleLine(value: string) {
   return stripVTControlCharacters(value).replace(/§[0-9a-fk-orx]/gi, "").trim()
     .replace(/^>\s*/, "")
-    .replace(/^(?:\[(?:\d{2}:\d{2}:\d{2}|[^\]\r\n]{0,80}\/(?:INFO|WARN|ERROR)|(?:INFO|WARN|ERROR)|\d{4}-\d{2}-\d{2}[^\]\r\n]*)\]\s*:?\s*)+/i, "");
+    // Vanilla uses `[HH:mm:ss] [thread/INFO]:`; Spigot, Paper and Velocity merge the
+    // level into the time bracket as `[HH:mm:ss INFO]:`; Forge starts with `[06Nov2026 20:51:01.533]`.
+    .replace(/^(?:\[(?:\d{2}:\d{2}:\d{2}(?:\s+[A-Z]{3,8})?|\d{2}[A-Z]{3}\d{4}\s[^\]\r\n]*|[^\]\r\n]{0,80}\/[^\]\r\n]{0,40}|(?:INFO|WARN|ERROR)|\d{4}-\d{2}-\d{2}[^\]\r\n]*)\]\s*:?\s*)+/i, "");
 }
 
 export interface OnlinePlayers { names: string[]; maxPlayers: number }
