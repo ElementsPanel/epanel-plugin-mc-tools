@@ -7,8 +7,8 @@ import { sceneMaterials } from "./scene-materials";
 import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjection } from "./perspective-transition";
 import { SceneKind } from "../../../shared/scene";
 import { sortTransparentFaces } from "./scene-transparency";
-import { keyboardPan } from "./navigation";
-import { normalizeBearing, rotatedSize, tileInView } from "./bearing";
+import { KeyboardNavigation } from "./navigation";
+import { normalizeBearing, rotatedSize, screenToWorld, tileInView } from "./bearing";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
 const tileKey = (x: number, z: number, y?: number) => `${y ?? "surface"}:${x}:${z}`;
@@ -51,6 +51,7 @@ export class SceneViewport implements MapRenderer {
   private readonly controls: OrbitControls;
   private readonly materials: ReturnType<typeof sceneMaterials>;
   private readonly observer: ResizeObserver;
+  private readonly navigation: KeyboardNavigation;
   private readonly abort = new AbortController();
   private readonly cache = new Map<string, SceneTile>();
   private readonly displayed = new Map<string, SceneTile>();
@@ -110,7 +111,6 @@ export class SceneViewport implements MapRenderer {
     this.controls = new OrbitControls(this.viewCamera, inputCanvas);
     this.controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
     this.controls.touches = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
-    this.controls.keyPanSpeed = 16;
     this.controls.target.copy(target);
     this.controls.minDistance = 160 / 12; this.controls.maxDistance = 160;
     this.controls.minPolarAngle = 0.08; this.controls.maxPolarAngle = Math.PI / 2 - 0.08;
@@ -127,7 +127,8 @@ export class SceneViewport implements MapRenderer {
     this.controls.update();
     this.updateClipping();
     inputCanvas.addEventListener("pointerdown", this.focus);
-    inputCanvas.addEventListener("keydown", this.keydown);
+    this.navigation = new KeyboardNavigation(inputCanvas,
+      () => !this.topDown && !this.transition && this.active && !this.lost && this.controls.enabled && !this.abort.signal.aborted, this.schedule);
     canvas.addEventListener("webglcontextlost", this.contextLost);
     this.observer = new ResizeObserver(this.resize);
     if (inputCanvas === canvas) { this.observer.observe(canvas); this.resize(); }
@@ -145,6 +146,7 @@ export class SceneViewport implements MapRenderer {
 
   setProjection(projection: "perspective" | "orthographic") {
     if (this.abort.signal.aborted || projection === this.projection) return;
+    this.navigation.clear();
     this.advanceTransition();
     // Clear an unfinished drag and its inertia without moving the current camera.
     const position = this.viewCamera.position.clone(), target = this.controls.target.clone(), rotation = this.viewCamera.quaternion.clone();
@@ -171,6 +173,7 @@ export class SceneViewport implements MapRenderer {
   setActive(active: boolean) {
     if (this.active === active || this.abort.signal.aborted) return;
     this.active = active;
+    if (!active) this.navigation.clear();
     if (active) this.schedule();
     else { cancelAnimationFrame(this.frame); this.frame = 0; clearTimeout(this.animationTimer); }
   }
@@ -230,12 +233,12 @@ export class SceneViewport implements MapRenderer {
 
   dispose() {
     if (this.abort.signal.aborted) return;
+    this.navigation.dispose();
     this.abort.abort(); cancelAnimationFrame(this.frame); this.frame = 0;
     this.transition = undefined;
     clearTimeout(this.animationTimer);
     this.observer.disconnect(); this.controls.removeEventListener("change", this.schedule); this.controls.dispose();
     this.inputCanvas.removeEventListener("pointerdown", this.focus);
-    this.inputCanvas.removeEventListener("keydown", this.keydown);
     this.canvas.removeEventListener("webglcontextlost", this.contextLost);
     for (const tile of [...this.cache.values()]) this.remove(tile);
     this.displayed.clear(); this.pending.clear(); this.failed.clear(); this.skipped.clear();
@@ -259,15 +262,8 @@ export class SceneViewport implements MapRenderer {
   }
 
   private focus = () => { if (!this.topDown) this.inputCanvas.focus({ preventScroll: true }); };
-  private keydown = (event: KeyboardEvent) => {
-    if (this.topDown || this.transition || !this.active || this.lost || !this.controls.enabled || this.abort.signal.aborted) return;
-    const direction = keyboardPan(event);
-    if (!direction) return;
-    event.preventDefault();
-    this.controls.pan(-direction[0] * this.controls.keyPanSpeed, -direction[1] * this.controls.keyPanSpeed);
-    this.schedule();
-  };
   private contextLost = (event: Event) => {
+    this.navigation.clear();
     event.preventDefault(); this.lost = true; cancelAnimationFrame(this.frame); this.frame = 0;
     clearTimeout(this.animationTimer);
     this.changed({ ...this.camera, loading: 0, warnings: 0, error: new Error("MC_MAP_WEBGL_UNAVAILABLE") });
@@ -287,7 +283,7 @@ export class SceneViewport implements MapRenderer {
   }
   private schedule = () => {
     if (this.abort.signal.aborted || this.frame || this.lost || !this.active) return;
-    this.frame = requestAnimationFrame(() => { this.frame = 0; this.draw(); });
+    this.frame = requestAnimationFrame(time => { this.frame = 0; this.draw(time); });
   };
 
   private rebase() {
@@ -306,9 +302,16 @@ export class SceneViewport implements MapRenderer {
     return value === undefined || value === -32768 ? undefined : Math.min(value, this.sliceY ?? Infinity);
   }
 
-  private draw() {
+  private draw(time = performance.now()) {
     clearTimeout(this.animationTimer);
     if (!this.transition && !this.topDown) this.controls.update();
+    const movement = this.navigation.advance(time);
+    if (movement) {
+      const scale = 2 * this.controls.getDistance() * Math.tan(this.viewCamera.fov * Math.PI / 360) / this.height;
+      const offset = screenToWorld(movement.x * scale, movement.y * scale, this.bearing);
+      this.controls.target.x += offset.x; this.controls.target.z += offset.z;
+      this.viewCamera.position.x += offset.x; this.viewCamera.position.z += offset.z;
+    }
     const x = clamp(this.controls.target.x + this.origin.x), z = clamp(this.controls.target.z + this.origin.z);
     if (x !== this.controls.target.x + this.origin.x || z !== this.controls.target.z + this.origin.z) this.center(x, z);
     this.camera.x = x; this.camera.z = z; this.rebase();
@@ -379,7 +382,7 @@ export class SceneViewport implements MapRenderer {
       + [...this.pending].filter(key => this.visible.has(key)).length;
     this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, bearing: this.bearing, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 2 - this.pending.size))) void this.fetch(item);
-    if (settling || transitioning) this.schedule();
+    if (settling || transitioning || movement) this.schedule();
     if (this.transition || animated && !this.reducedMotion) this.animationTimer = setTimeout(this.schedule, 50);
   }
 

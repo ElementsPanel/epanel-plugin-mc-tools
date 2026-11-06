@@ -107,23 +107,47 @@ function animatedViewport(t, reduced = false) {
   return { view, worldPosition, frames, listeners, requests, images, markers, states, blends, motion, frame, wheel, touch, captured, canvas };
 }
 
-test("2D WASD and left-drag pan the map, keep spawn projection aligned, and preserve browser shortcuts", t => {
+test("2D held WASD combines directions smoothly, keeps spawn aligned, and preserves mouse pan and shortcuts", t => {
   const f = animatedViewport(t); f.frame(0);
   assert.deepEqual(f.view.projectSpawn(), { x: 256, y: 128 });
   let prevented = 0;
   const key = (code, extras = {}) => f.listeners.get("keydown")({ code, preventDefault() { prevented++; }, ...extras });
   key("KeyW"); key("KeyD");
-  assert.deepEqual(f.view.camera, { x: 8, z: -8, zoom: 2 });
-  assert.deepEqual(f.view.projectSpawn(), { x: 240, y: 144 });
-  key("ArrowDown"); key("ArrowLeft"); assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 });
+  assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 }, "movement starts on the animation frame");
+  f.frame(16); const first = f.view.camera.x;
+  f.frame(32); assert(f.view.camera.x > first && first > 0);
+  assert.equal(f.view.camera.x, -f.view.camera.z);
+  assert.deepEqual(f.view.projectSpawn(), { x: 256 - f.view.camera.x * 2, y: 128 - f.view.camera.z * 2 });
+  key("ArrowDown"); key("ArrowLeft"); const cancelled = { ...f.view.camera };
+  f.frame(48); assert.deepEqual(f.view.camera, cancelled, "opposite directions cancel");
   key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true });
-  assert.equal(prevented, 4); assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 });
+  f.frame(64); assert.equal(prevented, 4); assert.deepEqual(f.view.camera, cancelled);
+  f.view.center(0, 0);
   f.listeners.get("pointerdown")({ button: 0, pointerId: 1, clientX: 100, clientY: 100 });
   f.listeners.get("pointermove")({ pointerId: 1, clientX: 120, clientY: 130 });
   assert.deepEqual(f.view.camera, { x: -10, z: -15, zoom: 2 });
   f.listeners.get("pointerup")({ pointerId: 1 });
   assert.equal(f.captured.size, 0);
   f.listeners.get("contextmenu")({ preventDefault() { prevented++; } }); assert.equal(prevented, 5);
+});
+
+test("2D keyboard movement coexists with zoom and stops on release, blur and mode changes", t => {
+  const f = animatedViewport(t); f.frame(0);
+  const key = (code, extras = {}) => f.listeners.get("keydown")({ code, preventDefault() {}, ...extras });
+  key("KeyW"); key("KeyD"); f.frame(16);
+  f.listeners.get("keyup")({ code: "KeyW" }); const z = f.view.camera.z;
+  f.wheel(-100, 256, 128); f.frame(32);
+  assert.equal(f.view.camera.z, z); assert(f.view.camera.zoom > 2);
+  const x = f.view.camera.x; f.frame(48); assert(f.view.camera.x > x);
+  f.listeners.get("keyup")({ code: "KeyD" }); const stopped = { ...f.view.camera };
+  f.frame(240); assert.equal(f.view.camera.x, stopped.x); assert.equal(f.view.camera.z, stopped.z);
+  assert(f.view.camera.zoom > stopped.zoom, "zoom finishes after releasing the movement keys");
+  key("KeyA"); f.frame(256); f.listeners.get("blur")(); const blurred = { ...f.view.camera };
+  key("KeyA", { repeat: true }); f.frame(272); assert.deepEqual(f.view.camera, blurred);
+  key("KeyW"); f.frame(288); const switched = { ...f.view.camera };
+  f.view.setMode("3d"); f.view.setMode("2d");
+  key("KeyW", { repeat: true }); f.frame(304); assert.deepEqual(f.view.camera, switched);
+  key("KeyW"); f.frame(320); assert(f.view.camera.z < switched.z, "a new press starts movement again");
 });
 
 test("2D right-drag rotates in place, keeps zoom under the cursor, and pans in screen directions until reset north", t => {
@@ -140,13 +164,15 @@ test("2D right-drag rotates in place, keeps zoom under the cursor, and pans in s
   f.listeners.get("pointermove")({ pointerId: 2, clientX: 120, clientY: 130 });
   f.listeners.get("pointerup")({ pointerId: 2 });
   near(f.view.camera.x, 15); near(f.view.camera.z, -10);
-  f.listeners.get("keydown")({ code: "KeyW", preventDefault() {} }); near(f.view.camera.x, 23); near(f.view.camera.z, -10);
+  f.listeners.get("keydown")({ code: "KeyW", preventDefault() {} }); f.frame(32);
+  assert(f.view.camera.x > 15); near(f.view.camera.z, -10);
+  f.listeners.get("keyup")({ code: "KeyW" });
   const anchor = f.worldPosition(f.view.camera, 512, 256, 123, 90, Math.PI / 2);
-  f.wheel(-100); f.frame(32);
+  f.wheel(-100); f.frame(48);
   const after = f.worldPosition(f.view.camera, 512, 256, 123, 90, Math.PI / 2);
   near(after.x, anchor.x); near(after.z, anchor.z);
   const final = { ...f.view.camera };
-  f.view.resetBearing(); f.frame(48);
+  f.view.resetBearing(); f.frame(64);
   assert.equal(f.states.at(-1).bearing, 0); assert.deepEqual(f.view.camera, final);
 });
 

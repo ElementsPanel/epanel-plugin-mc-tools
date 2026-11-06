@@ -84,7 +84,7 @@ function overview(t, options = {}) {
   };
   const foreground = context("foreground");
   const canvas = {
-    style: {}, ownerDocument: { createElement: createCanvas },
+    style: {}, ownerDocument: Object.assign(new EventTarget(), { createElement: createCanvas }),
     before(...elements) { layers.splice(layers.indexOf(this), 0, ...elements); },
     get clientWidth() { return Math.round(bounds.width); }, get clientHeight() { return Math.round(bounds.height); },
     getBoundingClientRect: () => ({ left: 10, top: 20, width: bounds.width * bounds.scale, height: bounds.height * bounds.scale }), getContext: () => foreground,

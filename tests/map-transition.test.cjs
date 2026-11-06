@@ -116,23 +116,45 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
   return { view, frame, ready: () => ready(), frames, rendered, listeners, uniforms, requests, states, visibleTopDownTiles };
 }
 
-test("3D uses right orbit, left pan and WASD to move in camera-relative directions without changing the view angle", t => {
-  const f = sceneFixture(t, true, false, true); f.ready(); f.frame(0);
+test("3D held WASD combines camera-relative directions, preserves the view angle and stops without mouse inertia", t => {
+  const f = sceneFixture(t, false, false, true); f.ready(); f.frame(0);
   assert.deepEqual(f.view.controls.mouseButtons, { LEFT: three.MOUSE.PAN, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE });
   assert.deepEqual(f.view.controls.touches, { ONE: three.TOUCH.ROTATE, TWO: three.TOUCH.DOLLY_PAN });
   const start = f.view.controls.target.clone(), offset = f.view.viewCamera.position.clone().sub(start);
   let prevented = 0;
   const key = (code, extras = {}) => f.listeners.get("keydown")({ code, preventDefault() { prevented++; }, ...extras });
-  key("KeyW");
+  const up = code => f.listeners.get("keyup")({ code });
+  key("KeyW"); near(f.view.controls.target.distanceTo(start), 0); f.frame(16);
   assert(f.view.controls.target.x < start.x && f.view.controls.target.z < start.z);
+  const first = f.view.controls.target.clone(); f.frame(32);
+  assert(f.view.controls.target.distanceTo(start) > first.distanceTo(start), "one press keeps moving on subsequent frames");
   near(f.view.viewCamera.position.clone().sub(f.view.controls.target).distanceTo(offset), 0);
-  key("KeyS"); near(f.view.controls.target.distanceTo(start), 0);
-  key("KeyA"); assert(f.view.controls.target.x < start.x && f.view.controls.target.z > start.z);
-  key("KeyD"); near(f.view.controls.target.distanceTo(start), 0);
-  key("ArrowUp"); key("ArrowDown"); near(f.view.controls.target.distanceTo(start), 0);
-  key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true }); assert.equal(prevented, 6);
-  f.view.setProjection("orthographic"); key("KeyW"); assert.equal(prevented, 6);
-  f.view.dispose(); assert.equal(f.listeners.has("keydown"), false);
+  key("KeyD"); const diagonal = f.view.controls.target.clone(); f.frame(48);
+  near(f.view.controls.target.x, diagonal.x); assert(f.view.controls.target.z < diagonal.z);
+  up("KeyW"); const right = f.view.controls.target.clone(); f.frame(64);
+  assert(f.view.controls.target.x > right.x && f.view.controls.target.z < right.z);
+  up("KeyD"); const stopped = f.view.controls.target.clone(); f.frame(80); f.frame(96);
+  near(f.view.controls.target.distanceTo(stopped), 0);
+  near(f.view.viewCamera.position.clone().sub(f.view.controls.target).distanceTo(offset), 0);
+  key("ArrowUp"); key("ArrowDown"); f.frame(112); near(f.view.controls.target.distanceTo(stopped), 0);
+  key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true }); assert.equal(prevented, 4);
+  f.view.setProjection("orthographic"); key("KeyW"); assert.equal(prevented, 4);
+  f.view.dispose(); assert.equal(f.listeners.has("keydown"), false); assert.equal(f.listeners.has("keyup"), false);
+});
+
+test("3D movement clears on pause, projection switch and context loss instead of resuming held keys", t => {
+  const f = sceneFixture(t, true, false, true); f.ready(); f.frame(0);
+  const key = (repeat = false) => f.listeners.get("keydown")({ code: "KeyW", repeat, preventDefault() {} });
+  key(); f.frame(16); const paused = { ...f.view.camera };
+  f.view.setActive(false); f.frame(32); f.view.setActive(true); key(true); f.frame(48);
+  assert.deepEqual(f.view.camera, paused);
+  key(); f.frame(64); assert(f.view.camera.x < paused.x);
+  f.view.setProjection("orthographic"); f.frame(80);
+  f.view.setProjection("perspective"); f.frame(96); const switched = { ...f.view.camera };
+  key(true); f.frame(112); assert.deepEqual(f.view.camera, switched);
+  key(); f.frame(128); assert(f.view.camera.x < switched.x);
+  f.listeners.get("webglcontextlost")({ preventDefault() {} });
+  assert.equal(f.frames.size, 0); assert.equal(f.view.navigation.advance(144), undefined);
 });
 
 test("heading follows 3D orbit and resetting north preserves center, tilt and zoom after damping settles", t => {

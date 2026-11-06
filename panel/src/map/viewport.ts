@@ -1,6 +1,6 @@
 import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import { loadSceneViewport } from "./scene-loader";
-import { keyboardPan } from "./navigation";
+import { KeyboardNavigation } from "./navigation";
 import { normalizeBearing, rotatedSize, screenToWorld, tileInView, worldToScreen } from "./bearing";
 
 export interface Camera { x: number; z: number; zoom: number }
@@ -82,6 +82,7 @@ export class MapViewport {
   private detailUnavailable = false;
   private detailError?: unknown;
   private readonly observer: ResizeObserver;
+  private readonly navigation: KeyboardNavigation;
   private world: MapWorld;
   private width = 1;
   private height = 1;
@@ -124,7 +125,7 @@ export class MapViewport {
     canvas.addEventListener("pointercancel", this.up);
     canvas.addEventListener("lostpointercapture", this.up);
     canvas.addEventListener("wheel", this.wheel, { passive: false });
-    canvas.addEventListener("keydown", this.keydown);
+    this.navigation = new KeyboardNavigation(canvas, () => this.mode === "2d" && !this.detail?.isTransitioning && !this.abort.signal.aborted, () => this.schedule());
     canvas.addEventListener("contextmenu", this.contextMenu);
     this.observer = new ResizeObserver(entries => this.resize(entries.find(entry => entry.target === canvas)?.contentRect));
     this.observer.observe(canvas);
@@ -156,6 +157,7 @@ export class MapViewport {
 
   setMode(mode: "2d" | "3d") {
     if (this.mode === mode || this.abort.signal.aborted) return;
+    this.navigation.clear();
     this.stopZoom();
     const previous = this.mode;
     this.clearPointers();
@@ -180,12 +182,13 @@ export class MapViewport {
 
   dispose() {
     this.abort.abort();
+    this.navigation.dispose();
     this.observer.disconnect();
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.zoomAnimation = undefined;
     this.clearPointers();
-    for (const [name, callback] of [["pointerdown", this.down], ["pointermove", this.move], ["pointerup", this.up], ["pointercancel", this.up], ["lostpointercapture", this.up], ["wheel", this.wheel], ["keydown", this.keydown], ["contextmenu", this.contextMenu]] as const) {
+    for (const [name, callback] of [["pointerdown", this.down], ["pointermove", this.move], ["pointerup", this.up], ["pointercancel", this.up], ["lostpointercapture", this.up], ["wheel", this.wheel], ["contextmenu", this.contextMenu]] as const) {
       this.canvas.removeEventListener(name, callback as EventListener);
     }
     this.cache.clear();
@@ -263,14 +266,6 @@ export class MapViewport {
   };
 
   private contextMenu = (event: Event) => event.preventDefault();
-  private keydown = (event: KeyboardEvent) => {
-    if (this.mode === "3d" || this.detail?.isTransitioning || this.abort.signal.aborted) return;
-    const direction = keyboardPan(event);
-    if (!direction) return;
-    event.preventDefault();
-    const offset = screenToWorld(direction[0] * 16 / this.camera.zoom, direction[1] * 16 / this.camera.zoom, this.bearing);
-    this.center(this.camera.x + offset.x, this.camera.z + offset.z);
-  };
 
   private move = (event: PointerEvent) => {
     if (!this.pointers.has(event.pointerId)) return;
@@ -362,6 +357,13 @@ export class MapViewport {
 
   private draw(time = performance.now()) {
     let animating = this.advanceZoom(time);
+    const movement = this.navigation.advance(time);
+    if (movement) {
+      const offset = screenToWorld(movement.x / this.camera.zoom, movement.y / this.camera.zoom, this.bearing);
+      this.camera.x = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, this.camera.x + offset.x));
+      this.camera.z = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, this.camera.z + offset.z));
+      animating = true;
+    }
     const foreground = this.canvas.getContext("2d");
     if (!foreground) return;
     this.updateDetail();
@@ -376,6 +378,7 @@ export class MapViewport {
     if (context !== foreground) foreground.clearRect(0, 0, this.width, this.height);
     if (this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible) {
       this.changed({ ...this.detailState!, x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, bearing: this.bearing });
+      if (animating) this.schedule();
       return;
     }
     context.fillStyle = "#19252a";
