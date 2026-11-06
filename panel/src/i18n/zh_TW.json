@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "切換為 3D 場景",
   "MC_MAP_3D_EXIT": "切換為 2D 地圖",
   "MC_MAP_3D_SCENE": "存檔 3D 場景",
-  "MC_MAP_3D_HINT": "左鍵拖曳旋轉視角，右鍵或雙指拖曳平移，滾輪或捏合縮放。點選地圖後可用 WASD 或方向鍵平移。",
+  "MC_MAP_3D_HINT": "左鍵或雙指拖曳平移，右鍵拖曳旋轉視角，滾輪或捏合縮放。點選地圖後可用 WASD 或方向鍵平移。",
   "MC_MAP_3D_SLICE_HINT": "3D 切面顯示所選 Y 層及其下方的方塊，拖曳滑桿可切開地形。",
   "MC_MAP_3D_LOADING": "正在載入 3D 場景…",
   "MC_MAP_3D_EMPTY": "附近沒有已儲存的方塊，可更換座標或返回出生點。",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON 設定已儲存，但無法要求重新啟動。請在實例主控台手動重新啟動。",
   "MC_MAP_RCON_UNAVAILABLE": "RCON 連線失敗或逾時，請確認已啟用並重新啟動伺服器，且節點可以存取對應的 TCP 連接埠。",
   "MC_MAP_RCON_AUTH": "RCON 驗證失敗，請檢查設定中的密碼；修改後需要重新啟動伺服器。",
-  "MC_MAP_RCON_RESPONSE": "RCON 傳回的玩家資訊無效或不完整。"
+  "MC_MAP_RCON_RESPONSE": "RCON 傳回的玩家資訊無效或不完整。",
+  "MC_MAP_HEADING": "朝向",
+  "MC_MAP_RESET_NORTH": "點選恢復北方朝上"
 }

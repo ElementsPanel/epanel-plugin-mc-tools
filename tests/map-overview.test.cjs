@@ -43,9 +43,11 @@ function overview(t, options = {}) {
       Object.assign(this, { canvas, world, load, changed, y, projection, inputCanvas, camera: { ...world.spawn, zoom: 2 }, ready: false, disposed: false, active: true });
       renderers.push(this);
     }
-    setTopDownView(camera, width, height) {
+    setTopDownView(camera, width, height, bearing = 0) {
       Object.assign(this.camera, camera); this.setSize(width, height);
+      this.bearing = bearing;
     }
+    setBearing(bearing) { this.bearing = bearing; }
     renderTopDown() {}
     get nextView() { return { camera: { ...this.camera }, width: this.width, height: this.height }; }
     setSize(width, height) {
@@ -58,8 +60,8 @@ function overview(t, options = {}) {
     setActive(active) { this.active = active; }
     setLayer(y) { this.y = y; }
     render(state = {}) {
-      this.frameView = { ...this.nextView, orthographic: this.projection === "orthographic" };
-      this.changed({ ...this.frameView.camera, loading: 0, warnings: 0, ...state });
+      this.frameView = { ...this.nextView, bearing: this.bearing ?? 0, orthographic: this.projection === "orthographic" };
+      this.changed({ ...this.frameView.camera, bearing: this.bearing ?? 0, loading: 0, warnings: 0, ...state });
     }
     dispose() { this.disposed = true; }
   }
@@ -114,6 +116,20 @@ function overview(t, options = {}) {
   });
   return { view, canvas, frame, zoom, ready, imports, renderers, requests, draws, frames, states, layers, bounds, resize, listeners, SceneViewport, loadScene, motion };
 }
+
+test("rotated detail refreshes before compositing and shares heading with the overview through mode switches", async t => {
+  const f = overview(t); f.zoom(5); const detail = await f.ready(); detail.ready = true;
+  detail.renderTopDown = () => detail.render();
+  f.view.setBearing(.7); f.frame(16);
+  assert(Math.abs(detail.frameView.bearing - .7) < 1e-8);
+  assert.equal(detail.canvas.style.transform, "translate(0px, 0px) scale(1)");
+  f.view.setMode("3d"); detail.bearing = 1.2; detail.render(); f.frame(32);
+  assert(Math.abs(f.states.at(-1).bearing - 1.2) < 1e-8);
+  f.view.setMode("2d"); f.frame(48);
+  assert(Math.abs(detail.frameView.bearing - 1.2) < 1e-8);
+  f.view.resetBearing(); f.frame(64);
+  assert.equal(detail.frameView.bearing, 0); assert.equal(f.states.at(-1).bearing, 0);
+});
 
 test("zoomed-in detail waits for visible geometry, fades over the backdrop, and stays opaque during later loads and pans", async t => {
   const f = overview(t); f.frame();

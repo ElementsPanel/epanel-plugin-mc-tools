@@ -73,8 +73,17 @@ function animatedViewport(t, reduced = false) {
   globalThis.matchMedia = () => motion;
   globalThis.Image = class { set src(value) { this.url = value; queueMicrotask(() => this.onload()); } };
   globalThis.OffscreenCanvas = class {
-    constructor() {
-      this.context = { clearRect() {}, drawImage(image) { blends.push({ image, alpha: this.globalAlpha, operation: this.globalCompositeOperation }); } };
+    constructor(width, height) {
+      this.width = width; this.height = height; this.draws = [];
+      const canvas = this;
+      this.context = {
+        setTransform(...matrix) { this.matrix = matrix; },
+        clearRect() { canvas.draws.length = 0; },
+        drawImage(image, ...bounds) {
+          blends.push({ image, alpha: this.globalAlpha, operation: this.globalCompositeOperation });
+          canvas.draws.push({ image, bounds, matrix: this.matrix, alpha: this.globalAlpha });
+        }
+      };
     }
     getContext() { return this.context; }
   };
@@ -98,7 +107,7 @@ function animatedViewport(t, reduced = false) {
   return { view, worldPosition, frames, listeners, requests, images, markers, states, blends, motion, frame, wheel, touch, captured, canvas };
 }
 
-test("2D WASD and right-drag pan the map, keep spawn projection aligned, and preserve browser shortcuts", t => {
+test("2D WASD and left-drag pan the map, keep spawn projection aligned, and preserve browser shortcuts", t => {
   const f = animatedViewport(t); f.frame(0);
   assert.deepEqual(f.view.projectSpawn(), { x: 256, y: 128 });
   let prevented = 0;
@@ -109,12 +118,83 @@ test("2D WASD and right-drag pan the map, keep spawn projection aligned, and pre
   key("ArrowDown"); key("ArrowLeft"); assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 });
   key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true });
   assert.equal(prevented, 4); assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 });
-  f.listeners.get("pointerdown")({ button: 2, pointerId: 1, clientX: 100, clientY: 100 });
+  f.listeners.get("pointerdown")({ button: 0, pointerId: 1, clientX: 100, clientY: 100 });
   f.listeners.get("pointermove")({ pointerId: 1, clientX: 120, clientY: 130 });
   assert.deepEqual(f.view.camera, { x: -10, z: -15, zoom: 2 });
   f.listeners.get("pointerup")({ pointerId: 1 });
   assert.equal(f.captured.size, 0);
   f.listeners.get("contextmenu")({ preventDefault() { prevented++; } }); assert.equal(prevented, 5);
+});
+
+test("2D right-drag rotates in place, keeps zoom under the cursor, and pans in screen directions until reset north", t => {
+  const f = animatedViewport(t, true); f.frame(0);
+  const near = (a, b) => assert(Math.abs(a - b) < 1e-8, `${a} != ${b}`);
+  const start = { ...f.view.camera };
+  f.listeners.get("pointerdown")({ button: 2, pointerId: 1, clientX: 100, clientY: 100 });
+  f.listeners.get("pointermove")({ pointerId: 1, clientX: 100 + 256 / (4 * .65), clientY: 100 });
+  f.frame(16);
+  near(f.states.at(-1).bearing, Math.PI / 2); assert.deepEqual(f.view.camera, start);
+  const point = f.view.project({ x: 10, y: 64, z: 0 }); near(point.x, 256); near(point.y, 108);
+  f.listeners.get("pointerup")({ pointerId: 1 });
+  f.listeners.get("pointerdown")({ button: 0, pointerId: 2, clientX: 100, clientY: 100 });
+  f.listeners.get("pointermove")({ pointerId: 2, clientX: 120, clientY: 130 });
+  f.listeners.get("pointerup")({ pointerId: 2 });
+  near(f.view.camera.x, 15); near(f.view.camera.z, -10);
+  f.listeners.get("keydown")({ code: "KeyW", preventDefault() {} }); near(f.view.camera.x, 23); near(f.view.camera.z, -10);
+  const anchor = f.worldPosition(f.view.camera, 512, 256, 123, 90, Math.PI / 2);
+  f.wheel(-100); f.frame(32);
+  const after = f.worldPosition(f.view.camera, 512, 256, 123, 90, Math.PI / 2);
+  near(after.x, anchor.x); near(after.z, anchor.z);
+  const final = { ...f.view.camera };
+  f.view.resetBearing(); f.frame(48);
+  assert.equal(f.states.at(-1).bearing, 0); assert.deepEqual(f.view.camera, final);
+});
+
+test("rotated viewport coverage includes all corners, and touch pan/pinch preserve the rotated midpoint", t => {
+  const { visibleTiles, worldPosition } = loader()("panel/src/map/viewport.ts");
+  const camera = { x: -103.5, z: 69.25, zoom: 1.2 };
+  for (const bearing of [.3, Math.PI / 4, Math.PI / 2, 5.9]) {
+    const tiles = new Set(visibleTiles(camera, 1100, 350, bearing).map(tile => tile.key));
+    for (const x of [0, 550, 1100]) for (const y of [0, 175, 350]) {
+      const point = worldPosition(camera, 1100, 350, x, y, bearing);
+      assert(tiles.has(`${Math.floor(point.x / 128)}:${Math.floor(point.z / 128)}`));
+    }
+  }
+  const f = animatedViewport(t); f.view.setBearing(1.1); f.frame(0);
+  const anchor = worldPosition(f.view.camera, 512, 256, 150, 100, 1.1);
+  f.touch("pointerdown", 1, 100, 100); f.touch("pointerdown", 2, 200, 100);
+  f.touch("pointermove", 1, 50, 120); f.touch("pointermove", 2, 250, 120); f.frame(16);
+  const after = worldPosition(f.view.camera, 512, 256, 150, 120, 1.1);
+  assert(Math.abs(anchor.x - after.x) < 1e-8 && Math.abs(anchor.z - after.z) < 1e-8);
+  assert.equal(f.view.camera.zoom, 4);
+});
+
+test("rotating tiles composites pixel-aligned edges once, preserves fades and works at fractional zoom and DPR", async t => {
+  const f = animatedViewport(t); f.view.setBearing(.4); f.frame(0);
+  f.requests.slice(0, 3).forEach(request => request.resolve({ image: `tile:${request.x}:${request.z}`, warnings: 0 }));
+  await new Promise(resolve => setImmediate(resolve));
+  f.images.length = 0; f.frame(16);
+  assert.equal(f.images.length, 1, "one assembled layer is rotated instead of separate tile images");
+  const raster = f.images[0].image;
+  assert(raster instanceof OffscreenCanvas); assert(raster.draws.length >= 2);
+  assert(raster.draws.every(draw => draw.alpha === 0));
+  f.frame(136); assert(raster.draws.every(draw => draw.alpha > 0 && draw.alpha < 1));
+  f.frame(256); assert(raster.draws.every(draw => draw.alpha === 1));
+  globalThis.devicePixelRatio = 1.25;
+  f.view.resize({ width: 511.5, height: 255.25 });
+  f.view.camera.zoom = 3.7; f.view.center(-.375, .125);
+  for (const [index, angle] of [.001, .3, 1.1, Math.PI / 2, 5.9].entries()) {
+    f.images.length = 0; f.view.setBearing(angle); f.frame(400 + index * 16);
+    assert.equal(f.images.length, 1); assert.equal(f.images[0].image, raster); assert.equal(f.images[0].alpha, 1);
+    const rx = f.canvas.width / 511.5, ry = f.canvas.height / 255.25;
+    assert(raster.draws.length >= 2);
+    for (const draw of raster.draws) {
+      assert.deepEqual(draw.matrix, [rx, 0, 0, ry, 0, 0], "tiles are assembled without rotation");
+      draw.bounds.forEach((value, i) => assert(Math.abs(value * (i % 2 ? ry : rx) - Math.round(value * (i % 2 ? ry : rx))) < 1e-8));
+    }
+    assert(raster.draws.some(a => raster.draws.some(b => a !== b && a.bounds[1] === b.bounds[1] && Math.abs(a.bounds[0] + a.bounds[2] - b.bounds[0]) < 1e-8)), "adjacent tile edges coincide before rotation");
+  }
+  f.view.dispose(); assert.equal(raster.width, 0); assert.equal(raster.height, 0);
 });
 
 test("touch pinch and two-finger pan preserve the midpoint's world position and continue as a single-finger drag", t => {

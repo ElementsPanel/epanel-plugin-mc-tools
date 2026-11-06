@@ -38,7 +38,9 @@ const modes = computed(() => [
   { value: "surface", title: t("MC_MAP_SURFACE") },
   { value: "slice", title: t("MC_MAP_SLICE") }
 ]);
-const state = reactive({ x: 0, z: 0, zoom: 2, loading: 0, warnings: 0, limited: false, empty: false });
+const state = reactive({ x: 0, z: 0, zoom: 2, bearing: 0, loading: 0, warnings: 0, limited: false, empty: false });
+const heading = computed(() => ((Math.round(state.bearing * 180 / Math.PI) % 360) + 360) % 360);
+const headingLabel = computed(() => `${t("MC_MAP_HEADING")}: ${heading.value}° · ${t("MC_MAP_RESET_NORTH")}`);
 let viewport: MapViewport | undefined;
 let nextCenter: { x: number; z: number } | undefined;
 const markers = shallowRef<ReturnType<typeof playerMarkers>>([]);
@@ -72,7 +74,7 @@ const items = computed(() => worlds.value.map((world) => {
   return { value: world.id, title: `${world.name} · ${key ? t(key) : world.dimension}` };
 }));
 
-async function draw(center?: { x: number; z: number }, zoom?: number) {
+async function draw(center?: { x: number; z: number }, zoom?: number, bearing = state.bearing) {
   const generation = ++drawing;
   viewport?.dispose();
   viewport = undefined;
@@ -91,6 +93,7 @@ async function draw(center?: { x: number; z: number }, zoom?: number) {
   };
   viewport = new MapViewport(canvas.value, current.value, api.tile, changed, layer.value, api.scene);
   if (zoom !== undefined) viewport.camera.zoom = zoom;
+  if (bearing) viewport.setBearing(bearing);
   if (center) viewport.center(center.x, center.z);
   else { x.value = String(current.value.spawn.x); z.value = String(current.value.spawn.z); }
   viewport.setMode(renderMode.value);
@@ -269,7 +272,15 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
         </VCard>
       </VMenu>
       <template v-if="current && !loading">
-        <VBtn class="mc-map-render-toggle" :width="48" :height="48" :title="t(renderMode === '2d' ? 'MC_MAP_3D_ENTER' : 'MC_MAP_3D_EXIT')" :aria-label="t(renderMode === '2d' ? 'MC_MAP_3D_ENTER' : 'MC_MAP_3D_EXIT')" :aria-pressed="renderMode === '3d'" @click="error = ''; renderMode = renderMode === '2d' ? '3d' : '2d'">{{ renderMode === '2d' ? '3D' : '2D' }}</VBtn>
+        <div class="mc-map-view-controls">
+          <VBtn class="mc-map-render-toggle" :width="48" :height="48" :title="t(renderMode === '2d' ? 'MC_MAP_3D_ENTER' : 'MC_MAP_3D_EXIT')" :aria-label="t(renderMode === '2d' ? 'MC_MAP_3D_ENTER' : 'MC_MAP_3D_EXIT')" :aria-pressed="renderMode === '3d'" @click="error = ''; renderMode = renderMode === '2d' ? '3d' : '2d'">{{ renderMode === '2d' ? '3D' : '2D' }}</VBtn>
+          <VBtn class="mc-map-heading" :width="48" :height="48" :title="headingLabel" :aria-label="headingLabel" @click="viewport?.resetBearing()">
+            <span class="mc-map-heading-content" aria-hidden="true">
+              <svg class="mc-map-heading-needle" viewBox="0 0 24 24" :style="{ transform: `rotate(${-state.bearing}rad)` }"><path d="M12 1 18 12H6Z" fill="#ef5350" /><path d="m12 23 6-11H6Z" fill="currentColor" /></svg>
+              <span>{{ heading }}°</span>
+            </span>
+          </VBtn>
+        </div>
         <div v-if="renderMode === '3d' && state.empty" class="mc-map-scene-empty" role="status">{{ t("MC_MAP_3D_EMPTY") }}</div>
         <div class="mc-map-zoom">
           <VBtn variant="text" size="small" min-width="36" :title="t('MC_MAP_ZOOM_IN')" :aria-label="t('MC_MAP_ZOOM_IN')" @click="viewport?.zoom(1.5)">+</VBtn>
@@ -305,9 +316,12 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-list-avatar { margin-right: 12px; }
 .mc-map-locate-hint { font-size: 12px; opacity: 0.7; margin-left: 8px; }
 .mc-map-notice { position: absolute; top: 12px; left: 84px; right: 84px; z-index: 3; max-width: 620px; }
-.mc-map-render-toggle { position: absolute; top: var(--mc-map-control-gap); right: var(--mc-map-control-gap); z-index: 3; min-width: 48px; padding: 8px; font-weight: 600; }
+.mc-map-view-controls { position: absolute; top: var(--mc-map-control-gap); right: var(--mc-map-control-gap); z-index: 3; display: flex; flex-direction: column; gap: 8px; }
+.mc-map-render-toggle, .mc-map-heading { min-width: 48px; padding: 8px; font-weight: 600; }
+.mc-map-heading-content { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; line-height: 1; font-variant-numeric: tabular-nums; }
+.mc-map-heading-needle { width: 20px; height: 20px; }
 /* Outrank desktop mode's injected !important radius reset, regardless of load order. */
-.mc-map-surface .mc-map-render-toggle { border-radius: var(--mc-map-control-radius) !important; }
+.mc-map-surface .mc-map-render-toggle, .mc-map-surface .mc-map-heading { border-radius: var(--mc-map-control-radius) !important; }
 .mc-map-scene-empty { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(420px, 90%); text-align: center; padding: 16px; border-radius: 16px; color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); pointer-events: none; }
 .mc-map-empty { display: grid; place-items: center; height: 100%; min-height: 280px; color: #dbe5e5; padding: 24px; text-align: center; }
 .mc-map-surface .mc-map-position { position: absolute; z-index: 3; border-radius: var(--mc-map-control-radius) !important; height: auto; min-height: 44px; padding: 12px 16px; text-transform: none; }
@@ -315,7 +329,7 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-zoom { position: absolute; right: var(--mc-map-control-gap); bottom: var(--mc-map-control-gap); display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: var(--mc-map-control-radius); overflow: hidden; }
 .mc-map-tools-card.v-card { width: min(400px, calc(100vw - 24px)); max-height: min(70dvh, 540px); overflow-y: auto; overscroll-behavior: contain; border-radius: 18px !important; }
 .mc-map-position :deep(.v-btn__content) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
-.mc-map-position, .mc-map-zoom, .mc-map-render-toggle { color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
+.mc-map-position, .mc-map-zoom, .mc-map-render-toggle, .mc-map-heading { color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
 .mc-map-zoom :deep(.v-btn) { color: inherit; }
 .mc-world-map-fullscreen { position: absolute; inset: 0; min-height: 0; }
 .mc-world-map-fullscreen .mc-map-surface { position: absolute; inset: 0; min-height: 0; }

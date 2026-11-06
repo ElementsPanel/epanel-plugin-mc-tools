@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "Switch to the 3D scene",
   "MC_MAP_3D_EXIT": "Switch to the 2D map",
   "MC_MAP_3D_SCENE": "Saved world 3D scene",
-  "MC_MAP_3D_HINT": "Left-drag to orbit, right-drag or drag with two fingers to pan, and scroll or pinch to zoom. Click the map to pan with WASD or arrow keys.",
+  "MC_MAP_3D_HINT": "Left-drag or drag with two fingers to pan, right-drag to orbit, and scroll or pinch to zoom. Click the map to pan with WASD or arrow keys.",
   "MC_MAP_3D_SLICE_HINT": "The 3D cutaway shows blocks at and below the selected Y level. Drag the slider to cut through terrain.",
   "MC_MAP_3D_LOADING": "Loading the 3D scene…",
   "MC_MAP_3D_EMPTY": "No saved blocks nearby. Choose other coordinates or return to spawn.",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON settings were saved, but the restart could not be requested. Restart the instance from the console.",
   "MC_MAP_RCON_UNAVAILABLE": "RCON connection failed or timed out. Check that RCON is enabled, the server has restarted, and its TCP port is reachable from the node.",
   "MC_MAP_RCON_AUTH": "RCON authentication failed. Check the configured password and restart the server if it changed.",
-  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete."
+  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete.",
+  "MC_MAP_HEADING": "Heading",
+  "MC_MAP_RESET_NORTH": "Click to face north"
 }

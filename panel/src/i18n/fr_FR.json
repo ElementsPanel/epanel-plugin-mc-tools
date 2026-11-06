@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "Passer à la scène 3D",
   "MC_MAP_3D_EXIT": "Passer à la carte 2D",
   "MC_MAP_3D_SCENE": "Scène 3D du monde sauvegardé",
-  "MC_MAP_3D_HINT": "Glissez avec le bouton gauche pour tourner, le bouton droit ou deux doigts pour déplacer, et utilisez la molette ou pincez pour zoomer. Cliquez sur la carte pour la déplacer avec WASD ou les flèches.",
+  "MC_MAP_3D_HINT": "Glissez avec le bouton gauche ou deux doigts pour déplacer, le bouton droit pour tourner, et utilisez la molette ou pincez pour zoomer. Cliquez sur la carte pour la déplacer avec WASD ou les flèches.",
   "MC_MAP_3D_SLICE_HINT": "La coupe 3D affiche les blocs au niveau Y choisi et en dessous. Déplacez le curseur pour couper le terrain.",
   "MC_MAP_3D_LOADING": "Chargement de la scène 3D…",
   "MC_MAP_3D_EMPTY": "Aucun bloc sauvegardé à proximité. Choisissez d’autres coordonnées ou revenez au point d’apparition.",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON settings were saved, but the restart could not be requested. Restart the instance from the console.",
   "MC_MAP_RCON_UNAVAILABLE": "RCON connection failed or timed out. Check that RCON is enabled, the server has restarted, and its TCP port is reachable from the node.",
   "MC_MAP_RCON_AUTH": "RCON authentication failed. Check the configured password and restart the server if it changed.",
-  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete."
+  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete.",
+  "MC_MAP_HEADING": "Orientation",
+  "MC_MAP_RESET_NORTH": "Cliquer pour orienter vers le nord"
 }

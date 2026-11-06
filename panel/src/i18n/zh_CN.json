@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "切换为 3D 场景",
   "MC_MAP_3D_EXIT": "切换为 2D 地图",
   "MC_MAP_3D_SCENE": "存档 3D 场景",
-  "MC_MAP_3D_HINT": "左键拖动旋转视角，右键或双指拖动平移，滚轮或捏合缩放。点击地图后可用 WASD 或方向键平移。",
+  "MC_MAP_3D_HINT": "左键或双指拖动平移，右键拖动旋转视角，滚轮或捏合缩放。点击地图后可用 WASD 或方向键平移。",
   "MC_MAP_3D_SLICE_HINT": "3D 切面显示所选 Y 层及其下方的方块，拖动滑块可切开地形。",
   "MC_MAP_3D_LOADING": "正在加载 3D 场景…",
   "MC_MAP_3D_EMPTY": "附近没有已保存的方块，可更换坐标或返回出生点。",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON 配置已保存，但无法发起重启。请在实例控制台手动重启。",
   "MC_MAP_RCON_UNAVAILABLE": "RCON 连接失败或超时，请确认已启用并重启服务端，且节点可以访问对应的 TCP 端口。",
   "MC_MAP_RCON_AUTH": "RCON 认证失败，请检查配置中的密码；修改后需要重启服务端。",
-  "MC_MAP_RCON_RESPONSE": "RCON 返回的玩家信息无效或不完整。"
+  "MC_MAP_RCON_RESPONSE": "RCON 返回的玩家信息无效或不完整。",
+  "MC_MAP_HEADING": "朝向",
+  "MC_MAP_RESET_NORTH": "点击恢复北向朝上"
 }

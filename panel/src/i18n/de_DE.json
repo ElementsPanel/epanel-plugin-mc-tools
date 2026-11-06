@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "Zur 3D-Szene wechseln",
   "MC_MAP_3D_EXIT": "Zur 2D-Karte wechseln",
   "MC_MAP_3D_SCENE": "3D-Szene der gespeicherten Welt",
-  "MC_MAP_3D_HINT": "Mit der linken Maustaste drehen, mit der rechten Maustaste oder zwei Fingern verschieben, mit Mausrad oder Pinch zoomen. Nach einem Klick auf die Karte verschieben WASD oder die Pfeiltasten die Ansicht.",
+  "MC_MAP_3D_HINT": "Mit der linken Maustaste oder zwei Fingern verschieben, mit der rechten Maustaste drehen, mit Mausrad oder Pinch zoomen. Nach einem Klick auf die Karte verschieben WASD oder die Pfeiltasten die Ansicht.",
   "MC_MAP_3D_SLICE_HINT": "Der 3D-Schnitt zeigt Blöcke auf und unter der gewählten Y-Ebene. Mit dem Regler das Gelände aufschneiden.",
   "MC_MAP_3D_LOADING": "3D-Szene wird geladen…",
   "MC_MAP_3D_EMPTY": "Keine gespeicherten Blöcke in der Nähe. Andere Koordinaten wählen oder zum Spawn zurückkehren.",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON settings were saved, but the restart could not be requested. Restart the instance from the console.",
   "MC_MAP_RCON_UNAVAILABLE": "RCON connection failed or timed out. Check that RCON is enabled, the server has restarted, and its TCP port is reachable from the node.",
   "MC_MAP_RCON_AUTH": "RCON authentication failed. Check the configured password and restart the server if it changed.",
-  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete."
+  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete.",
+  "MC_MAP_HEADING": "Ausrichtung",
+  "MC_MAP_RESET_NORTH": "Klicken, um nach Norden auszurichten"
 }

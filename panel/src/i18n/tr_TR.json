@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "3D sahneye geç",
   "MC_MAP_3D_EXIT": "2D haritaya geç",
   "MC_MAP_3D_SCENE": "Kayıtlı dünyanın 3D sahnesi",
-  "MC_MAP_3D_HINT": "Döndürmek için sol tuşla, kaydırmak için sağ tuşla veya iki parmakla sürükleyin. Tekerlek veya kıstırma hareketiyle yakınlaştırın. WASD veya ok tuşlarıyla kaydırmak için haritaya tıklayın.",
+  "MC_MAP_3D_HINT": "Kaydırmak için sol tuşla veya iki parmakla, döndürmek için sağ tuşla sürükleyin. Tekerlek veya kıstırma hareketiyle yakınlaştırın. WASD veya ok tuşlarıyla kaydırmak için haritaya tıklayın.",
   "MC_MAP_3D_SLICE_HINT": "3D kesit, seçilen Y seviyesindeki ve altındaki blokları gösterir. Araziyi kesmek için kaydırıcıyı sürükleyin.",
   "MC_MAP_3D_LOADING": "3D sahne yükleniyor…",
   "MC_MAP_3D_EMPTY": "Yakında kayıtlı blok yok. Başka koordinatlar seçin veya doğma noktasına dönün.",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON settings were saved, but the restart could not be requested. Restart the instance from the console.",
   "MC_MAP_RCON_UNAVAILABLE": "RCON connection failed or timed out. Check that RCON is enabled, the server has restarted, and its TCP port is reachable from the node.",
   "MC_MAP_RCON_AUTH": "RCON authentication failed. Check the configured password and restart the server if it changed.",
-  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete."
+  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete.",
+  "MC_MAP_HEADING": "Yön",
+  "MC_MAP_RESET_NORTH": "Kuzeye yöneltmek için tıklayın"
 }

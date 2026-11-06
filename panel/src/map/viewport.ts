@@ -1,9 +1,10 @@
 import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import { loadSceneViewport } from "./scene-loader";
 import { keyboardPan } from "./navigation";
+import { normalizeBearing, rotatedSize, screenToWorld, tileInView, worldToScreen } from "./bearing";
 
 export interface Camera { x: number; z: number; zoom: number }
-export interface MapViewState { x: number; z: number; zoom: number; loading: number; warnings: number; error?: unknown; limited?: boolean; empty?: boolean }
+export interface MapViewState { x: number; z: number; zoom: number; bearing?: number; loading: number; warnings: number; error?: unknown; limited?: boolean; empty?: boolean }
 export interface MapRenderer {
   readonly camera: Camera;
   center(x: number, z: number): void;
@@ -23,24 +24,29 @@ const ZOOM_DURATION = 200;
 const easeOut = (progress: number) => 1 - Math.pow(1 - progress, 3);
 const tileKey = (position: string, y?: number) => `${y ?? "surface"}:${position}`;
 
-export function worldPosition(camera: Camera, width: number, height: number, x: number, y: number) {
-  return { x: camera.x + (x - width / 2) / camera.zoom, z: camera.z + (y - height / 2) / camera.zoom };
+export function worldPosition(camera: Camera, width: number, height: number, x: number, y: number, bearing = 0) {
+  const offset = screenToWorld((x - width / 2) / camera.zoom, (y - height / 2) / camera.zoom, bearing);
+  return { x: camera.x + offset.x, z: camera.z + offset.z };
 }
 
-export function zoomCamera(camera: Camera, width: number, height: number, x: number, y: number, zoom: number) {
-  const before = worldPosition(camera, width, height, x, y);
+export function zoomCamera(camera: Camera, width: number, height: number, x: number, y: number, zoom: number, bearing = 0) {
+  const before = worldPosition(camera, width, height, x, y, bearing);
   camera.zoom = Math.max(1, Math.min(12, zoom));
-  camera.x = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, before.x - (x - width / 2) / camera.zoom));
-  camera.z = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, before.z - (y - height / 2) / camera.zoom));
+  const offset = screenToWorld((x - width / 2) / camera.zoom, (y - height / 2) / camera.zoom, bearing);
+  camera.x = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, before.x - offset.x));
+  camera.z = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, before.z - offset.z));
 }
 
-export function visibleTiles(camera: Camera, width: number, height: number) {
-  const start = worldPosition(camera, width, height, 0, 0);
-  const end = worldPosition(camera, width, height, width, height);
+export function visibleTiles(camera: Camera, width: number, height: number, bearing = 0) {
+  const size = rotatedSize(width, height, bearing);
+  const start = worldPosition(camera, size.width, size.height, 0, 0);
+  const end = worldPosition(camera, size.width, size.height, size.width, size.height);
   const limit = Math.ceil(MAP_LIMIT / MAP_TILE_SIZE);
   const result: { x: number; z: number; key: string }[] = [];
   for (let z = Math.max(-limit, Math.floor(start.z / MAP_TILE_SIZE)); z <= Math.min(limit, Math.floor(end.z / MAP_TILE_SIZE)); z++) {
-    for (let x = Math.max(-limit, Math.floor(start.x / MAP_TILE_SIZE)); x <= Math.min(limit, Math.floor(end.x / MAP_TILE_SIZE)); x++) result.push({ x, z, key: `${x}:${z}` });
+    for (let x = Math.max(-limit, Math.floor(start.x / MAP_TILE_SIZE)); x <= Math.min(limit, Math.floor(end.x / MAP_TILE_SIZE)); x++) {
+      if (tileInView(x * MAP_TILE_SIZE, z * MAP_TILE_SIZE, MAP_TILE_SIZE, camera, width / camera.zoom / 2, height / camera.zoom / 2, bearing)) result.push({ x, z, key: `${x}:${z}` });
+    }
   }
   return result.sort((a, b) => Math.hypot(a.x * MAP_TILE_SIZE - camera.x, a.z * MAP_TILE_SIZE - camera.z) - Math.hypot(b.x * MAP_TILE_SIZE - camera.x, b.z * MAP_TILE_SIZE - camera.z));
 }
@@ -62,10 +68,11 @@ export class MapViewport {
   private visible = new Set<string>();
   private readonly abort = new AbortController();
   private blendCanvas?: HTMLCanvasElement | OffscreenCanvas;
+  private terrainCanvas?: HTMLCanvasElement | OffscreenCanvas;
   private detail?: import("./scene-viewport").SceneViewport;
   private detailCanvas?: HTMLCanvasElement;
   private backdropCanvas?: HTMLCanvasElement;
-  private detailFrame?: { camera: Camera; width: number; height: number; orthographic: boolean; y?: number };
+  private detailFrame?: { camera: Camera; width: number; height: number; bearing?: number; orthographic: boolean; y?: number };
   private detailOpacity = 0;
   private detailFade?: { from: number; to: number; startedAt: number };
   private mode: "2d" | "3d" = "2d";
@@ -80,14 +87,17 @@ export class MapViewport {
   private height = 1;
   private frame = 0;
   private readonly pointers = new Map<number, { x: number; y: number }>();
+  private rotating?: number;
+  private bearing = 0;
   private active = 0;
   private error?: unknown;
   private zoomAnimation?: ZoomAnimation;
   private readonly reducedMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : undefined;
 
   project(position: { x: number; y: number; z: number }) {
+    const offset = worldToScreen((position.x - this.camera.x) * this.camera.zoom, (position.z - this.camera.z) * this.camera.zoom, this.bearing);
     const point = this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible ? this.detail?.project(position)
-      : { x: (position.x - this.camera.x) * this.camera.zoom + this.width / 2, y: (position.z - this.camera.z) * this.camera.zoom + this.height / 2 };
+      : { x: offset.x + this.width / 2, y: offset.y + this.height / 2 };
     return point && point.x >= -32 && point.y >= -32 && point.x <= this.width + 32 && point.y <= this.height + 32 ? point : undefined;
   }
 
@@ -134,6 +144,16 @@ export class MapViewport {
     this.animateZoom(factor, this.width / 2, this.height / 2);
   }
 
+  setBearing(value: number) {
+    if (!Number.isFinite(value) || this.abort.signal.aborted) return;
+    this.stopZoom();
+    this.bearing = normalizeBearing(value);
+    if (this.mode === "3d" || this.detail?.isTransitioning) this.detail?.setBearing(this.bearing);
+    this.schedule();
+  }
+
+  resetBearing() { this.clearPointers(); this.setBearing(0); }
+
   setMode(mode: "2d" | "3d") {
     if (this.mode === mode || this.abort.signal.aborted) return;
     this.stopZoom();
@@ -141,9 +161,9 @@ export class MapViewport {
     this.clearPointers();
     this.mode = mode;
     if (this.detail) {
-      if (mode === "3d") this.detail.setTopDownView(this.camera, this.width, this.height);
+      if (mode === "3d") this.detail.setTopDownView(this.camera, this.width, this.height, this.bearing);
       this.detail.setProjection(mode === "3d" ? "perspective" : "orthographic");
-      if (previous === "3d") Object.assign(this.camera, this.detail.camera);
+      if (previous === "3d") { Object.assign(this.camera, this.detail.camera); this.bearing = this.detail.bearing ?? this.bearing; }
     }
     this.schedule();
   }
@@ -171,6 +191,8 @@ export class MapViewport {
     this.cache.clear();
     this.displayed.clear();
     this.blendCanvas = undefined;
+    if (this.terrainCanvas) this.terrainCanvas.width = this.terrainCanvas.height = 0;
+    this.terrainCanvas = undefined;
     this.stopDetail();
   }
 
@@ -182,6 +204,7 @@ export class MapViewport {
     this.stopZoom();
     this.width = width;
     this.height = height;
+    if (this.terrainCanvas) this.terrainCanvas.width = this.terrainCanvas.height = 0;
     const ratio = Math.min(devicePixelRatio || 1, 2);
     this.canvas.width = Math.round(this.width * ratio);
     this.canvas.height = Math.round(this.height * ratio);
@@ -204,7 +227,7 @@ export class MapViewport {
     const to = Math.max(1, Math.min(12, (this.zoomAnimation?.to ?? this.camera.zoom) * factor));
     if (to === (this.zoomAnimation?.to ?? this.camera.zoom)) return;
     if (this.reducedMotion?.matches) {
-      zoomCamera(this.camera, this.width, this.height, x, y, to);
+      zoomCamera(this.camera, this.width, this.height, x, y, to, this.bearing);
       this.zoomAnimation = undefined;
     } else {
       this.zoomAnimation = { from: this.camera.zoom, to, x, y, startedAt: time };
@@ -217,7 +240,7 @@ export class MapViewport {
     if (!animation) return false;
     const progress = this.reducedMotion?.matches ? 1 : Math.max(0, Math.min(1, (time - animation.startedAt) / ZOOM_DURATION));
     const zoom = progress === 1 ? animation.to : animation.from * Math.pow(animation.to / animation.from, easeOut(progress));
-    zoomCamera(this.camera, this.width, this.height, animation.x, animation.y, zoom);
+    zoomCamera(this.camera, this.width, this.height, animation.x, animation.y, zoom, this.bearing);
     if (progress === 1) this.zoomAnimation = undefined;
     return progress < 1;
   }
@@ -229,11 +252,13 @@ export class MapViewport {
 
   private down = (event: PointerEvent) => {
     if (![0, 2].includes(event.button) || this.mode === "3d" || this.detail?.isTransitioning || this.pointers.size >= 2) return;
+    if (this.rotating !== undefined || event.button === 2 && this.pointers.size) return;
     this.canvas.focus?.({ preventScroll: true });
     this.stopZoom();
     this.schedule();
     this.canvas.setPointerCapture(event.pointerId);
     this.pointers.set(event.pointerId, this.pointerPosition(event));
+    if (event.button === 2) this.rotating = event.pointerId;
     this.canvas.style.cursor = "grabbing";
   };
 
@@ -243,25 +268,34 @@ export class MapViewport {
     const direction = keyboardPan(event);
     if (!direction) return;
     event.preventDefault();
-    this.center(this.camera.x + direction[0] * 16 / this.camera.zoom, this.camera.z + direction[1] * 16 / this.camera.zoom);
+    const offset = screenToWorld(direction[0] * 16 / this.camera.zoom, direction[1] * 16 / this.camera.zoom, this.bearing);
+    this.center(this.camera.x + offset.x, this.camera.z + offset.z);
   };
 
   private move = (event: PointerEvent) => {
     if (!this.pointers.has(event.pointerId)) return;
     this.stopZoom();
+    if (this.rotating === event.pointerId) {
+      const previous = this.pointers.get(event.pointerId)!, next = this.pointerPosition(event);
+      this.pointers.set(event.pointerId, next);
+      this.setBearing(this.bearing + (next.x - previous.x) * Math.PI * 2 / this.height * 0.65);
+      return;
+    }
     const before = this.gesture();
     this.pointers.set(event.pointerId, this.pointerPosition(event));
     const after = this.gesture();
     // Apply distance and midpoint changes together, so the world point under
     // the fingers follows their midpoint even while pinching and panning.
     if (before.distance > 0 && after.distance > 0) {
-      zoomCamera(this.camera, this.width, this.height, before.x, before.y, this.camera.zoom * after.distance / before.distance);
+      zoomCamera(this.camera, this.width, this.height, before.x, before.y, this.camera.zoom * after.distance / before.distance, this.bearing);
     }
-    this.center(this.camera.x - (after.x - before.x) / this.camera.zoom, this.camera.z - (after.y - before.y) / this.camera.zoom);
+    const offset = screenToWorld((after.x - before.x) / this.camera.zoom, (after.y - before.y) / this.camera.zoom, this.bearing);
+    this.center(this.camera.x - offset.x, this.camera.z - offset.z);
   };
 
   private up = (event: PointerEvent) => {
     if (!this.pointers.delete(event.pointerId)) return;
+    if (this.rotating === event.pointerId) this.rotating = undefined;
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
     this.canvas.style.cursor = this.pointers.size ? "grabbing" : "grab";
   };
@@ -274,6 +308,7 @@ export class MapViewport {
   private clearPointers() {
     const ids = [...this.pointers.keys()];
     this.pointers.clear();
+    this.rotating = undefined;
     for (const id of ids) if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
     this.canvas.style.cursor = "grab";
   }
@@ -340,18 +375,36 @@ export class MapViewport {
     }
     if (context !== foreground) foreground.clearRect(0, 0, this.width, this.height);
     if (this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible) {
-      this.changed({ ...this.detailState!, x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom });
+      this.changed({ ...this.detailState!, x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, bearing: this.bearing });
       return;
     }
     context.fillStyle = "#19252a";
     context.fillRect(0, 0, this.width, this.height);
     context.fillStyle = "#213035";
     for (let z = 0; z < this.height; z += 32) for (let x = 0; x < this.width; x += 32) if ((x / 32 + z / 32) % 2) context.fillRect(x, z, 32, 32);
-    const visible = visibleTiles(this.camera, this.width, this.height);
+    const visible = visibleTiles(this.camera, this.width, this.height, this.bearing);
     this.visible = new Set(visible.map((item) => tileKey(item.key, this.sliceY)));
     const positions = new Set(visible.map((item) => item.key));
     for (const key of this.displayed.keys()) if (!positions.has(key)) this.displayed.delete(key);
     let warnings = 0;
+    let terrain: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D = context;
+    let paintWidth = this.width, paintHeight = this.height;
+    if (this.bearing) {
+      const size = rotatedSize(this.width, this.height, this.bearing);
+      this.terrainCanvas ??= typeof OffscreenCanvas === "function" ? new OffscreenCanvas(1, 1) : this.canvas.ownerDocument.createElement("canvas");
+      const width = Math.ceil((size.width + 4) * ratio / 128) * 128, height = Math.ceil((size.height + 4) * ratioY / 128) * 128;
+      // Grow in buckets while rotating, and keep the buffer until a layout resize.
+      if (this.terrainCanvas.width < width) this.terrainCanvas.width = width;
+      if (this.terrainCanvas.height < height) this.terrainCanvas.height = height;
+      const raster = this.terrainCanvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+      if (!raster) return;
+      terrain = raster;
+      terrain.setTransform(1, 0, 0, 1, 0, 0);
+      terrain.clearRect(0, 0, this.terrainCanvas.width, this.terrainCanvas.height);
+      terrain.setTransform(ratio, 0, 0, ratioY, 0, 0);
+      terrain.imageSmoothingEnabled = false;
+      paintWidth = this.terrainCanvas.width / ratio; paintHeight = this.terrainCanvas.height / ratioY;
+    }
     for (const item of visible) {
       let display = this.displayed.get(item.key);
       const tile = this.nearestTile(item.key, display?.tile);
@@ -362,7 +415,7 @@ export class MapViewport {
       }
       if (!display) continue;
       warnings += this.cache.get(tileKey(item.key, this.sliceY))?.warnings || 0;
-      const bounds = tileBounds(this.camera, this.width, this.height, item.x, item.z, ratio, ratioY);
+      const bounds = tileBounds(this.camera, paintWidth, paintHeight, item.x, item.z, ratio, ratioY);
       if (this.reducedMotion?.matches) {
         display.startedAt = time - display.duration;
         display.tile.appearedAt = time - TILE_FADE_DURATION;
@@ -370,21 +423,29 @@ export class MapViewport {
       const progress = Math.max(0, Math.min(1, (time - display.startedAt) / display.duration));
       if (progress < 1) animating = true;
       if (display.previous && progress < 1) {
-        context.globalAlpha = 1;
-        context.drawImage(this.blend(display.previous, display.tile, easeOut(progress)), bounds.x, bounds.y, bounds.width, bounds.height);
+        terrain.globalAlpha = 1;
+        terrain.drawImage(this.blend(display.previous, display.tile, easeOut(progress)), bounds.x, bounds.y, bounds.width, bounds.height);
       } else {
         display.previous = undefined;
-        context.globalAlpha = easeOut(progress);
-        context.drawImage(display.tile.image, bounds.x, bounds.y, bounds.width, bounds.height);
+        terrain.globalAlpha = easeOut(progress);
+        terrain.drawImage(display.tile.image, bounds.x, bounds.y, bounds.width, bounds.height);
       }
     }
     context.globalAlpha = 1;
+    if (terrain !== context) {
+      // Rasterize shared tile edges on the pixel grid before rotating the whole
+      // layer; rotating individual drawImage calls leaves antialiased seams.
+      const c = Math.cos(this.bearing), s = Math.sin(this.bearing), cx = this.width / 2, cy = this.height / 2;
+      context.setTransform(ratio * c, -ratioY * s, ratio * s, ratioY * c, ratio * (cx - c * cx - s * cy), ratioY * (cy + s * cx - c * cy));
+      context.drawImage(this.terrainCanvas!, (this.width - paintWidth) / 2, (this.height - paintHeight) / 2, paintWidth, paintHeight);
+    }
+    context.setTransform(ratio, 0, 0, ratioY, 0, 0);
     this.drawMarkers(foreground);
     const needed = visible.filter((item) => {
       const key = tileKey(item.key, this.sliceY);
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
     });
-    this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom,
+    this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, bearing: this.bearing,
       loading: needed.length + this.active + (this.wantsScene ? this.detailState?.loading || 0 : 0) + Number(this.detailLoading),
       warnings: Math.max(warnings, this.wantsScene ? this.detailState?.warnings || 0 : 0), limited: this.wantsScene && this.detailState?.limited,
       error: this.error ?? (this.wantsScene ? this.detailError ?? this.detailState?.error : undefined) });
@@ -447,11 +508,13 @@ export class MapViewport {
     // Composite WebGL directly. Copying it with 2D drawImage can swap R/B channels
     // on accelerated browser backends, including for textures without biome tint.
     const scale = frame.orthographic ? this.camera.zoom / frame.camera.zoom : 1;
-    const x = frame.orthographic ? (frame.camera.x - this.camera.x) * this.camera.zoom + this.width / 2 - frame.width * scale / 2 : 0;
-    const y = frame.orthographic ? (frame.camera.z - this.camera.z) * this.camera.zoom + this.height / 2 - frame.height * scale / 2 : 0;
+    const angle = frame.orthographic ? (frame.bearing ?? 0) - this.bearing : 0;
+    const offset = worldToScreen((frame.camera.x - this.camera.x) * this.camera.zoom, (frame.camera.z - this.camera.z) * this.camera.zoom, this.bearing);
+    const x = frame.orthographic ? offset.x + this.width / 2 - (Math.cos(angle) * frame.width - Math.sin(angle) * frame.height) * scale / 2 : 0;
+    const y = frame.orthographic ? offset.y + this.height / 2 - (Math.sin(angle) * frame.width + Math.cos(angle) * frame.height) * scale / 2 : 0;
     canvas.style.width = `${frame.orthographic ? frame.width : this.width}px`;
     canvas.style.height = `${frame.orthographic ? frame.height : this.height}px`;
-    canvas.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    canvas.style.transform = `translate(${x}px, ${y}px) ${angle ? `rotate(${angle}rad) ` : ""}scale(${scale})`;
   }
 
   private updateDetail() {
@@ -465,7 +528,7 @@ export class MapViewport {
     if (this.detail) {
       this.detail.setActive(true);
       if (this.mode === "2d") {
-        this.detail.setTopDownView(this.camera, this.width, this.height);
+        this.detail.setTopDownView(this.camera, this.width, this.height, this.bearing);
         this.detail.renderTopDown();
       }
       else this.detail.setSize(this.width, this.height);
@@ -495,6 +558,7 @@ export class MapViewport {
         } else {
           this.detailState = state;
           if (this.mode === "3d" && this.detail) Object.assign(this.camera, this.detail.camera);
+          if (this.mode === "3d" || this.detail?.isTransitioning) this.bearing = state.bearing ?? this.bearing;
           if (this.detail?.ready) this.detailFrame = { ...this.detail.frameView, y: this.sliceY };
           this.presentScene();
         }
@@ -503,6 +567,7 @@ export class MapViewport {
       this.detail.setSize(this.width, this.height);
       this.detail.camera.zoom = this.camera.zoom;
       this.detail.center(this.camera.x, this.camera.z);
+      this.detail.setBearing(this.bearing);
     }).catch(error => {
       if (this.abort.signal.aborted || generation !== this.detailGeneration) return;
       this.detailUnavailable = true; this.detailError = error; this.stopDetail(); this.schedule();

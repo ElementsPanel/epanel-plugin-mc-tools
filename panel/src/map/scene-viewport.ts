@@ -8,6 +8,7 @@ import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjectio
 import { SceneKind } from "../../../shared/scene";
 import { sortTransparentFaces } from "./scene-transparency";
 import { keyboardPan } from "./navigation";
+import { normalizeBearing, rotatedSize, tileInView } from "./bearing";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
 const tileKey = (x: number, z: number, y?: number) => `${y ?? "surface"}:${x}:${z}`;
@@ -24,11 +25,14 @@ export function visibleSceneTiles(camera: Camera) {
   return tiles.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
 }
 
-export function visibleTopDownTiles(camera: Camera, width: number, height: number, margin = 0) {
-  const halfWidth = width / camera.zoom / 2 + margin, halfHeight = height / camera.zoom / 2 + margin;
+export function visibleTopDownTiles(camera: Camera, width: number, height: number, margin = 0, bearing = 0) {
+  const size = rotatedSize(width / camera.zoom + margin * 2, height / camera.zoom + margin * 2, bearing);
+  const halfWidth = size.width / 2, halfHeight = size.height / 2;
   const limit = Math.ceil(MAP_LIMIT / SIZE), tiles: { x: number; z: number; position: string }[] = [];
   for (let z = Math.max(-limit, Math.floor((camera.z - halfHeight) / SIZE)); z <= Math.min(limit, Math.floor((camera.z + halfHeight) / SIZE)); z++) {
-    for (let x = Math.max(-limit, Math.floor((camera.x - halfWidth) / SIZE)); x <= Math.min(limit, Math.floor((camera.x + halfWidth) / SIZE)); x++) tiles.push({ x, z, position: `${x}:${z}` });
+    for (let x = Math.max(-limit, Math.floor((camera.x - halfWidth) / SIZE)); x <= Math.min(limit, Math.floor((camera.x + halfWidth) / SIZE)); x++) {
+      if (tileInView(x * SIZE, z * SIZE, SIZE, camera, width / camera.zoom / 2 + margin, height / camera.zoom / 2 + margin, bearing)) tiles.push({ x, z, position: `${x}:${z}` });
+    }
   }
   return tiles.sort((a, b) => Math.hypot((a.x + .5) * SIZE - camera.x, (a.z + .5) * SIZE - camera.z) - Math.hypot((b.x + .5) * SIZE - camera.x, (b.z + .5) * SIZE - camera.z));
 }
@@ -39,6 +43,7 @@ export class SceneViewport implements MapRenderer {
   private readonly viewCamera = new PerspectiveCamera(MAP_FOV, 1, 0.1, 600);
   private readonly topCamera = new OrthographicCamera(-1, 1, 1, -1, .1, MAP_MAX_Y - MAP_MIN_Y + 128);
   private topZoom = 2;
+  private topBearing = 0;
   private width = 1;
   private height = 1;
   private pixelRatio = 0;
@@ -103,7 +108,7 @@ export class SceneViewport implements MapRenderer {
     const target = new Vector3(world.spawn.x - this.origin.x, Math.min(sliceY ?? 64, 64) + 2, world.spawn.z - this.origin.z);
     this.viewCamera.position.copy(target).add(new Vector3(46, 46, 46).setLength(80));
     this.controls = new OrbitControls(this.viewCamera, inputCanvas);
-    this.controls.mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+    this.controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
     this.controls.touches = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
     this.controls.keyPanSpeed = 16;
     this.controls.target.copy(target);
@@ -131,7 +136,12 @@ export class SceneViewport implements MapRenderer {
   private get topDown() { return this.projection === "orthographic"; }
   get ready() { return this.atlasReady && !this.lost && !this.abort.signal.aborted; }
   get isTransitioning() { return !!this.transition; }
-  get frameView() { return { camera: { ...this.camera }, width: this.width, height: this.height, orthographic: this.topDown && !this.transition }; }
+  get bearing() {
+    if (this.topDown || this.transition) return this.topBearing;
+    const offset = this.viewCamera.position.clone().sub(this.controls.target);
+    return normalizeBearing(-Math.atan2(offset.x, offset.z));
+  }
+  get frameView() { return { camera: { ...this.camera }, width: this.width, height: this.height, bearing: this.bearing, orthographic: this.topDown && !this.transition }; }
 
   setProjection(projection: "perspective" | "orthographic") {
     if (this.abort.signal.aborted || projection === this.projection) return;
@@ -147,8 +157,10 @@ export class SceneViewport implements MapRenderer {
       this.topZoom = this.camera.zoom;
       const offset = this.viewCamera.position.clone().sub(this.controls.target);
       this.orbit = { polar: Math.acos(offset.y / offset.length()), azimuth: Math.atan2(offset.x, offset.z) };
+      this.topBearing = normalizeBearing(-this.orbit.azimuth);
     } else if (!this.transition) {
       this.controls.target.y = (this.elevation(this.camera.x, this.camera.z) ?? this.controls.target.y - 2) + 2;
+      this.orbit.azimuth = -this.topBearing;
     }
     this.projection = projection;
     this.transition = { from: this.blend, to: this.topDown ? 0 : 1, startedAt: performance.now() };
@@ -163,11 +175,12 @@ export class SceneViewport implements MapRenderer {
     else { cancelAnimationFrame(this.frame); this.frame = 0; clearTimeout(this.animationTimer); }
   }
 
-  setTopDownView(camera: Camera, width: number, height: number) {
+  setTopDownView(camera: Camera, width: number, height: number, bearing = this.topBearing) {
     if (!this.topDown || this.abort.signal.aborted || width <= 0 || height <= 0) return;
     this.setSize(width, height);
     if (camera.zoom !== this.topZoom) this.setZoom(camera.zoom);
     if (camera.x !== this.camera.x || camera.z !== this.camera.z) this.center(camera.x, camera.z);
+    if (!this.transition && bearing !== this.topBearing) this.setBearing(bearing);
   }
 
   /** Paint pending top-down changes in the same browser frame as the 2D map. */
@@ -188,6 +201,25 @@ export class SceneViewport implements MapRenderer {
   }
 
   zoom(factor: number) { if (Number.isFinite(factor) && factor > 0) this.setZoom(this.camera.zoom * factor); }
+
+  setBearing(value: number) {
+    if (!Number.isFinite(value) || this.abort.signal.aborted) return;
+    this.topBearing = normalizeBearing(value);
+    if (this.topDown && !this.transition) { this.schedule(); return; }
+    // Discard mouse inertia before resetting yaw so the next frame stays north-up.
+    const position = this.viewCamera.position.clone(), target = this.controls.target.clone();
+    const damping = this.controls.enableDamping;
+    this.controls.enableDamping = false; this.controls.update(); this.controls.enableDamping = damping;
+    this.controls.target.copy(target); this.viewCamera.position.copy(position);
+    this.orbit.azimuth = -this.topBearing;
+    if (this.transition) this.advanceTransition();
+    else {
+      const distance = Math.hypot(position.x - target.x, position.z - target.z);
+      this.viewCamera.position.set(target.x - Math.sin(this.topBearing) * distance, position.y, target.z + Math.cos(this.topBearing) * distance);
+      this.viewCamera.lookAt(target); this.controls.update();
+    }
+    this.schedule();
+  }
 
   setLayer(y?: number) {
     mapHeight(y);
@@ -280,10 +312,10 @@ export class SceneViewport implements MapRenderer {
     const x = clamp(this.controls.target.x + this.origin.x), z = clamp(this.controls.target.z + this.origin.z);
     if (x !== this.controls.target.x + this.origin.x || z !== this.controls.target.z + this.origin.z) this.center(x, z);
     this.camera.x = x; this.camera.z = z; this.rebase();
-    let tiles = this.topDown ? visibleTopDownTiles(this.camera, this.width, this.height) : visibleSceneTiles(this.camera);
+    let tiles = this.topDown ? visibleTopDownTiles(this.camera, this.width, this.height, 0, this.topBearing) : visibleSceneTiles(this.camera);
     if (this.transition) {
       // Keep both endpoint footprints in the same scene throughout a projection change.
-      const coverage = new Map([...visibleTopDownTiles(this.camera, this.width, this.height), ...visibleSceneTiles(this.camera)].map(tile => [tile.position, tile]));
+      const coverage = new Map([...visibleTopDownTiles(this.camera, this.width, this.height, 0, this.topBearing), ...visibleSceneTiles(this.camera)].map(tile => [tile.position, tile]));
       tiles = [...coverage.values()].sort((a, b) => this.distance(a) - this.distance(b));
     }
     const anchor = tiles.map(tile => tile.position).sort().join("|");
@@ -291,7 +323,7 @@ export class SceneViewport implements MapRenderer {
     this.visible = new Set(tiles.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
     // Fetch the visible footprint first, then keep two rings of ready geometry
     // outside every edge. Moving the camera can reveal them without a request.
-    const buffered = this.topDown && !this.transition ? visibleTopDownTiles(this.camera, this.width, this.height, PREFETCH_MARGIN) : [];
+    const buffered = this.topDown && !this.transition ? visibleTopDownTiles(this.camera, this.width, this.height, PREFETCH_MARGIN, this.topBearing) : [];
     const coverage = [...tiles, ...buffered.filter(tile => !this.visible.has(tileKey(tile.x, tile.z, this.sliceY)))];
     this.wanted = new Set(coverage.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
     const positions = new Set(tiles.map(tile => tile.position));
@@ -325,7 +357,7 @@ export class SceneViewport implements MapRenderer {
       this.topCamera.left = -this.width / this.topZoom / 2; this.topCamera.right = -this.topCamera.left;
       this.topCamera.top = this.height / this.topZoom / 2; this.topCamera.bottom = -this.topCamera.top;
       this.topCamera.position.set(this.controls.target.x, MAP_MAX_Y + 64, this.controls.target.z);
-      this.topCamera.up.set(0, 0, -1);
+      this.topCamera.up.set(Math.sin(this.topBearing), 0, -Math.cos(this.topBearing));
       this.topCamera.lookAt(this.controls.target.x, MAP_MIN_Y, this.controls.target.z);
       this.topCamera.updateProjectionMatrix();
     }
@@ -345,7 +377,7 @@ export class SceneViewport implements MapRenderer {
     });
     const loading = needed.filter(tile => this.visible.has(tileKey(tile.x, tile.z, this.sliceY))).length
       + [...this.pending].filter(key => this.visible.has(key)).length;
-    this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
+    this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, bearing: this.bearing, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 2 - this.pending.size))) void this.fetch(item);
     if (settling || transitioning) this.schedule();
     if (this.transition || animated && !this.reducedMotion) this.animationTimer = setTimeout(this.schedule, 50);
@@ -359,9 +391,10 @@ export class SceneViewport implements MapRenderer {
     this.blend = transition.from + (transition.to - transition.from) * progress;
     const target = this.controls.target;
     const pose = transitionPose(this.height, this.topZoom, this.blend, MAP_MAX_Y + 64 - target.y, this.orbit);
+    // Retain yaw while tilting between overhead and perspective views.
+    pose.azimuth = -this.topBearing;
     this.viewCamera.position.copy(target).add(new Vector3(Math.sin(pose.polar) * Math.sin(pose.azimuth), Math.cos(pose.polar), Math.sin(pose.polar) * Math.cos(pose.azimuth)).multiplyScalar(pose.distance));
-    // At the top-down endpoint, -Z is screen-up just as it is in the 2D canvas.
-    this.viewCamera.up.set(0, pose.progress, -(1 - pose.progress));
+    this.viewCamera.up.set(Math.sin(this.topBearing) * (1 - pose.progress), pose.progress, -Math.cos(this.topBearing) * (1 - pose.progress));
     this.viewCamera.lookAt(target);
     // Match both projections' scale at the target while the camera descends from above the world's height limit.
     this.viewCamera.fov = 2 * Math.atan(pose.halfHeight / pose.distance) * 180 / Math.PI;

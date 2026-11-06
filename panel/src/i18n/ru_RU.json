@@ -156,7 +156,7 @@
   "MC_MAP_3D_ENTER": "Переключить на 3D-сцену",
   "MC_MAP_3D_EXIT": "Переключить на 2D-карту",
   "MC_MAP_3D_SCENE": "3D-сцена сохранённого мира",
-  "MC_MAP_3D_HINT": "Перетаскивайте левой кнопкой для вращения, правой кнопкой или двумя пальцами для перемещения. Колесо или щипок меняют масштаб. Нажмите на карту, чтобы перемещаться клавишами WASD или стрелками.",
+  "MC_MAP_3D_HINT": "Перетаскивайте левой кнопкой или двумя пальцами для перемещения, правой кнопкой для вращения. Колесо или щипок меняют масштаб. Нажмите на карту, чтобы перемещаться клавишами WASD или стрелками.",
   "MC_MAP_3D_SLICE_HINT": "3D-срез показывает блоки на выбранной высоте Y и ниже. Передвигайте ползунок для разреза рельефа.",
   "MC_MAP_3D_LOADING": "Загрузка 3D-сцены…",
   "MC_MAP_3D_EMPTY": "Рядом нет сохранённых блоков. Выберите другие координаты или вернитесь к точке появления.",
@@ -183,5 +183,7 @@
   "MC_MAP_RCON_RESTART_FAILED": "RCON settings were saved, but the restart could not be requested. Restart the instance from the console.",
   "MC_MAP_RCON_UNAVAILABLE": "RCON connection failed or timed out. Check that RCON is enabled, the server has restarted, and its TCP port is reachable from the node.",
   "MC_MAP_RCON_AUTH": "RCON authentication failed. Check the configured password and restart the server if it changed.",
-  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete."
+  "MC_MAP_RCON_RESPONSE": "The RCON player response was invalid or incomplete.",
+  "MC_MAP_HEADING": "Направление",
+  "MC_MAP_RESET_NORTH": "Нажмите, чтобы ориентировать на север"
 }

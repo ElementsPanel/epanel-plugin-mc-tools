@@ -116,9 +116,9 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
   return { view, frame, ready: () => ready(), frames, rendered, listeners, uniforms, requests, states, visibleTopDownTiles };
 }
 
-test("3D uses left orbit, right pan and WASD to move in camera-relative directions without changing the view angle", t => {
+test("3D uses right orbit, left pan and WASD to move in camera-relative directions without changing the view angle", t => {
   const f = sceneFixture(t, true, false, true); f.ready(); f.frame(0);
-  assert.deepEqual(f.view.controls.mouseButtons, { LEFT: three.MOUSE.ROTATE, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.PAN });
+  assert.deepEqual(f.view.controls.mouseButtons, { LEFT: three.MOUSE.PAN, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE });
   assert.deepEqual(f.view.controls.touches, { ONE: three.TOUCH.ROTATE, TWO: three.TOUCH.DOLLY_PAN });
   const start = f.view.controls.target.clone(), offset = f.view.viewCamera.position.clone().sub(start);
   let prevented = 0;
@@ -133,6 +133,44 @@ test("3D uses left orbit, right pan and WASD to move in camera-relative directio
   key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true }); assert.equal(prevented, 6);
   f.view.setProjection("orthographic"); key("KeyW"); assert.equal(prevented, 6);
   f.view.dispose(); assert.equal(f.listeners.has("keydown"), false);
+});
+
+test("heading follows 3D orbit and resetting north preserves center, tilt and zoom after damping settles", t => {
+  const f = sceneFixture(t, false, false, true); f.ready(); f.frame(0);
+  near(f.view.bearing, Math.PI * 7 / 4);
+  f.view.controls.rotateLeft(.8); f.view.controls.pan(24, 12);
+  const target = f.view.controls.target.clone(), offset = f.view.viewCamera.position.clone().sub(target);
+  const zoom = f.view.camera.zoom;
+  assert(Math.abs(f.view.bearing - Math.PI * 7 / 4) > .01);
+  f.view.setBearing(0);
+  near(f.view.bearing, 0); near(f.view.controls.target.distanceTo(target), 0); near(f.view.camera.zoom, zoom);
+  near(f.view.viewCamera.position.y - target.y, offset.y);
+  near(f.view.viewCamera.position.x, target.x); assert(f.view.viewCamera.position.z > target.z);
+  f.frame(16); f.frame(32);
+  near(f.view.bearing, 0); near(f.states.at(-1).bearing, 0); near(f.view.controls.target.distanceTo(target), 0);
+});
+
+test("rotated 2D geometry matches map coordinates and preserves heading throughout 2D/3D transitions", async t => {
+  const f = sceneFixture(t, false, true, true), bearing = 1.2;
+  f.ready(); f.view.setTopDownView({ x: -37.5, z: 24.25, zoom: 4 }, 800, 600, bearing); f.frame(0);
+  const { worldToScreen } = load("panel/src/map/bearing.ts");
+  for (const y of [-64, 64, 1000]) {
+    const actual = f.view.project({ x: -27.5, y, z: 4.25 }), expected = worldToScreen(40, -80, bearing);
+    near(actual.x, 400 + expected.x); near(actual.y, 300 + expected.y);
+  }
+  const tiles = new Set(f.visibleTopDownTiles(f.view.camera, 800, 600, 0, bearing).map(tile => tile.position));
+  const { worldPosition } = load("panel/src/map/viewport.ts");
+  for (const x of [0, 800]) for (const y of [0, 600]) {
+    const point = worldPosition(f.view.camera, 800, 600, x, y, bearing);
+    assert(tiles.has(`${Math.floor(point.x / 32)}:${Math.floor(point.z / 32)}`));
+  }
+  f.view.setProjection("perspective");
+  for (const time of [0, 200, 400, 800]) { f.frame(time); near(f.view.bearing, bearing); near(f.states.at(-1).bearing, bearing); }
+  f.view.setProjection("orthographic");
+  for (const time of [800, 1000, 1200, 1600]) { f.frame(time); near(f.view.bearing, bearing); }
+  f.view.setBearing(0); f.frame(1616);
+  const north = f.view.project({ x: f.view.camera.x, y: 64, z: f.view.camera.z - 10 });
+  near(north.x, 400); near(north.y, 260);
 });
 
 test("spawn compass projects above saved terrain and follows both camera modes", async t => {
@@ -330,7 +368,7 @@ test("the orthographic scene has exact 2D scale at every elevation and remains a
       near(projected.x, 17 * zoom * 2 / width); near(projected.y, -23 * zoom * 2 / height);
       assert(projected.z >= -1 && projected.z <= 1, "the entire supported terrain height range is visible");
     }
-    assert.deepEqual(f.view.frameView, { camera: target, width, height, orthographic: true });
+    assert.deepEqual(f.view.frameView, { camera: target, width, height, bearing: 0, orthographic: true });
   }
   assert.equal(f.view.renderer.options.alpha, true);
   assert(!f.view.renderer.options.preserveDrawingBuffer, "direct canvas composition needs no retained readback buffer");
