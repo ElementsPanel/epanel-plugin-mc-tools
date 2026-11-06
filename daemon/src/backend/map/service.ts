@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { MAP_TILE_SIZE, mapCoordinate, mapSceneCoordinate, mapHeight, type MapTile, type MapSceneTile } from "../../../../shared/map";
+import { MAP_TILE_SIZE, mapCoordinate, mapSceneCoordinate, type MapTile, type MapSceneTile } from "../../../../shared/map";
 import { discoverWorlds, type SavedWorld } from "./worlds";
 import { chunkLayers, chunkSurface } from "./chunk";
 import { encodePng } from "./png";
@@ -64,16 +64,15 @@ export class WorldMapService {
     return worlds;
   }
 
-  async tile(instanceUuid: string, worldId: string, x: number, z: number, y?: number) {
+  async tile(instanceUuid: string, worldId: string, x: number, z: number) {
     mapCoordinate(x);
     mapCoordinate(z);
-    mapHeight(y);
     const world = (await this.worlds(instanceUuid)).find((item) => item.id === worldId);
     if (!world) throw new Error("MC_MAP_WORLD_MISSING");
-    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":" + (y ?? "surface") + ":" + x + ":" + z;
+    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":surface:" + x + ":" + z;
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const task = this.limited(() => this.render(world, key, x, z, y));
+    const task = this.limited(() => this.render(world, key, x, z));
     this.pending.set(key, task);
     try { return await task; }
     finally { this.pending.delete(key); }
@@ -92,20 +91,20 @@ export class WorldMapService {
     await this.snapshots.dispose();
   }
 
-  async scene(instanceUuid: string, worldId: string, x: number, z: number, y?: number): Promise<MapSceneTile> {
-    mapSceneCoordinate(x); mapSceneCoordinate(z); mapHeight(y);
+  async scene(instanceUuid: string, worldId: string, x: number, z: number): Promise<MapSceneTile> {
+    mapSceneCoordinate(x); mapSceneCoordinate(z);
     const world = (await this.worlds(instanceUuid)).find(item => item.id === worldId);
     if (!world) throw new Error("MC_MAP_WORLD_MISSING");
-    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":" + (y ?? "surface") + ":" + x + ":" + z;
+    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":surface:" + x + ":" + z;
     const pending = this.scenePending.get(key);
     if (pending) return pending;
-    const task = this.limited(() => this.renderScene(world, key, x, z, y));
+    const task = this.limited(() => this.renderScene(world, key, x, z));
     this.scenePending.set(key, task);
     try { return await task; }
     finally { this.scenePending.delete(key); }
   }
 
-  private async renderScene(world: SavedWorld, key: string, tileX: number, tileZ: number, y?: number): Promise<MapSceneTile> {
+  private async renderScene(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapSceneTile> {
     const cached = (stamp: string) => {
       const previous = this.sceneCache.get(key);
       if (previous?.stamp !== stamp) return;
@@ -113,7 +112,7 @@ export class WorldMapService {
       return previous.tile;
     };
     const finish = async (stamp: string, chunks: SceneChunk[], neighbors: SceneChunk[], warnings: number) => {
-      const tile = { ...await meshScene(chunks, world.dimension === "minecraft:the_nether", y, () => this.disposed, neighbors), chunks: chunks.length, warnings };
+      const tile = { ...await meshScene(chunks, world.dimension === "minecraft:the_nether", () => this.disposed, neighbors), chunks: chunks.length, warnings };
       if (!this.disposed && !warnings && !tile.limited) {
         this.sceneBytes -= this.sceneCache.get(key)?.bytes || 0;
         const bytes = tile.quads.length + tile.heights.length + (tile.tints?.length ?? 0);
@@ -147,7 +146,7 @@ export class WorldMapService {
     const chunks: SceneChunk[] = [], neighbors: SceneChunk[] = [];
     const result = await readJavaChunks(world, files, (nbt, x, z) => {
       x -= tileX * 2; z -= tileZ * 2;
-      (x >= 0 && x < 2 && z >= 0 && z < 2 ? chunks : neighbors).push({ x, z, layers: chunkLayers(nbt, undefined, true) });
+      (x >= 0 && x < 2 && z >= 0 && z < 2 ? chunks : neighbors).push({ x, z, layers: chunkLayers(nbt, true) });
     }, () => this.disposed);
     return finish(stamp, chunks, neighbors, result.warnings);
   }
@@ -167,8 +166,8 @@ export class WorldMapService {
     }
   }
 
-  private async render(world: SavedWorld, key: string, tileX: number, tileZ: number, sliceY?: number): Promise<MapTile> {
-    if (world.edition === "bedrock") return this.renderBedrock(world, key, tileX, tileZ, sliceY);
+  private async render(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapTile> {
+    if (world.edition === "bedrock") return this.renderBedrock(world, key, tileX, tileZ);
     const firstX = tileX * 8, firstZ = tileZ * 8;
     const { files, stamp } = await javaRegions(world, firstX, firstZ, 8);
     const cached = this.cache.get(key);
@@ -180,7 +179,7 @@ export class WorldMapService {
     const colors = new Uint32Array(MAP_TILE_SIZE ** 2);
     const heights = new Int16Array(colors.length).fill(-32768);
     const { chunks, warnings } = await readJavaChunks(world, files, (nbt, chunkX, chunkZ) => {
-      const surface = chunkSurface(nbt, world.dimension === "minecraft:the_nether", sliceY);
+      const surface = chunkSurface(nbt, world.dimension === "minecraft:the_nether");
       for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
         const target = ((chunkZ - firstZ) * 16 + z) * MAP_TILE_SIZE + (chunkX - firstX) * 16 + x;
         colors[target] = surface.colors[z * 16 + x];
@@ -190,7 +189,7 @@ export class WorldMapService {
     return this.finish(key, stamp, colors, heights, chunks, warnings);
   }
 
-  private async renderBedrock(world: SavedWorld, key: string, tileX: number, tileZ: number, sliceY?: number): Promise<MapTile> {
+  private async renderBedrock(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapTile> {
     return this.snapshots.use(world, async (db, stamp) => {
       const cached = this.cache.get(key);
       if (cached?.stamp === stamp) {
@@ -204,7 +203,7 @@ export class WorldMapService {
       for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) {
         if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
         let surface;
-        try { surface = await bedrockSurface(db, tileX * 8 + x, tileZ * 8 + z, world.dimensionId!, sliceY); }
+        try { surface = await bedrockSurface(db, tileX * 8 + x, tileZ * 8 + z, world.dimensionId!); }
         catch (error) {
           if (!(error instanceof Error) || error.message !== "MC_MAP_CORRUPT") throw error;
           warnings++;

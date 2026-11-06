@@ -37,10 +37,10 @@ function overview(t, options = {}) {
     Image: class { set src(value) { this.url = value; queueMicrotask(() => this.onload()); } }
   });
   class SceneViewport {
-    constructor(canvas, world, load, changed, y, projection, inputCanvas) {
+    constructor(canvas, world, load, changed, projection, inputCanvas) {
       if (options.fail) throw new Error("MC_MAP_WEBGL_UNAVAILABLE");
       canvas.webgl = true;
-      Object.assign(this, { canvas, world, load, changed, y, projection, inputCanvas, camera: { ...world.spawn, zoom: 2 }, ready: false, disposed: false, active: true });
+      Object.assign(this, { canvas, world, load, changed, projection, inputCanvas, camera: { ...world.spawn, zoom: 2 }, ready: false, disposed: false, active: true });
       renderers.push(this);
     }
     setTopDownView(camera, width, height, bearing = 0) {
@@ -58,7 +58,6 @@ function overview(t, options = {}) {
     zoom(factor) { this.camera.zoom *= factor; }
     setProjection(projection) { this.projection = projection; }
     setActive(active) { this.active = active; }
-    setLayer(y) { this.y = y; }
     render(state = {}) {
       this.frameView = { ...this.nextView, bearing: this.bearing ?? 0, orthographic: this.projection === "orthographic" };
       this.changed({ ...this.frameView.camera, bearing: this.bearing ?? 0, loading: 0, warnings: 0, ...state });
@@ -98,7 +97,7 @@ function overview(t, options = {}) {
   } } })("panel/src/map/viewport.ts");
   const view = new MapViewport(canvas, { id: "world", spawn: { x: 8.25, z: -16.375 } }, (world, x, z, signal, y) => {
     const gate = deferred(); requests.push({ ...gate, signal, y }); return gate.promise;
-  }, state => states.push(state), options.y, loadScene);
+  }, state => states.push(state), loadScene);
   const frame = (time = now) => {
     now = time; draws.length = 0;
     for (const id of [...frames.keys()]) { const fn = frames.get(id); frames.delete(id); fn?.(time); }
@@ -194,18 +193,12 @@ test("detail fades out while following zoom and drag, reverses smoothly, and pau
   assert.equal(f.frames.size, 0); assert.equal(f.renderers.length, 1);
 });
 
-test("a stale slice or failed context cannot remain visible during a fade-out", async t => {
+test("a failed context cannot remain visible during a fade-out", async t => {
   const f = overview(t); f.zoom(4);
   const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
   f.motion.matches = false;
   f.view.camera.zoom = 3.5; f.view.center(0, 0); f.frame(0); f.frame(80);
   assert(Number(detail.canvas.style.opacity) > 0);
-  f.view.setLayer(-64); f.frame(96);
-  assert.equal(detail.canvas.style.visibility, "hidden"); assert.equal(detail.canvas.style.opacity, "0");
-  f.frame(112); assert.equal(detail.active, false);
-  f.view.camera.zoom = 4; f.view.center(0, 0); detail.render(); f.frame(128); f.frame(368);
-  assert.equal(detail.canvas.style.opacity, "1");
-  f.view.camera.zoom = 3.5; f.view.center(0, 0); f.frame(384);
   detail.render({ error: new Error("MC_MAP_WEBGL_UNAVAILABLE") }); f.frame(400);
   assert.equal(detail.disposed, true); assert.deepEqual(f.layers, [f.canvas]);
   assert.equal(f.frames.size, 0);
@@ -284,14 +277,14 @@ test("two-finger zoom uses layout coordinates under dialog scaling and updates t
 });
 
 test("2D overview loads a real orthographic scene only at 4x, keeps its color backdrop while loading, and draws markers last", async t => {
-  const f = overview(t, { y: 0 }); f.frame();
+  const f = overview(t); f.frame();
   f.requests[0].resolve({ image: "color-tile", warnings: 0 }); await tick(); f.frame();
   assert(f.draws.some(draw => draw.image?.url === "data:image/png;base64,color-tile"));
   assert.equal(f.imports.length, 0);
   f.zoom(3.999); assert.equal(f.imports.length, 0);
   f.zoom(4); assert.equal(f.imports.length, 1);
   const detail = await f.ready(); f.frame();
-  assert.equal(detail.projection, "orthographic"); assert.equal(detail.load, f.loadScene); assert.equal(detail.y, 0);
+  assert.equal(detail.projection, "orthographic"); assert.equal(detail.load, f.loadScene);
   assert.deepEqual(detail.nextView, { camera: { x: 8.25, z: -16.375, zoom: 4 }, width: 800, height: 600 });
   detail.render({ loading: 2 }); f.frame();
   assert.equal(detail.canvas.style.visibility, "hidden", "wait for the atlas before compositing");
@@ -317,7 +310,7 @@ test("2D overview loads a real orthographic scene only at 4x, keeps its color ba
 });
 
 test("2D and 3D reuse the same scene, canvas and input target while changing only projection", async t => {
-  const f = overview(t, { y: 0 }); f.zoom(4);
+  const f = overview(t); f.zoom(4);
   const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
   assert.equal(detail.inputCanvas, f.canvas);
   for (let i = 0; i < 3; i++) {
@@ -330,7 +323,7 @@ test("2D and 3D reuse the same scene, canvas and input target while changing onl
     assert.equal(detail.canvas.style.visibility, "visible");
     assert.equal(detail.canvas.style.transform, "translate(0px, 0px) scale(1)");
     f.view.setMode("2d"); f.frame(); detail.render(); f.frame();
-    assert.equal(detail.projection, "orthographic"); assert.equal(detail.y, 0);
+    assert.equal(detail.projection, "orthographic");
     assert.equal(detail.canvas.style.visibility, "visible"); assert.equal(detail.disposed, false);
     assert.deepEqual(f.layers.slice(1), [detail.canvas, f.canvas]);
   }
@@ -348,7 +341,7 @@ test("mode changes during lazy loading use the latest projection without creatin
   assert.equal(detail.projection, "orthographic"); assert.equal(f.renderers.length, 1);
 });
 
-test("retained orthographic frames stay aligned during pan/zoom and cannot show a stale Y slice", async t => {
+test("retained orthographic frames stay aligned during pan and zoom", async t => {
   const f = overview(t); f.zoom(4);
   const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
   f.view.center(10.25, -13.375); f.frame();
@@ -359,11 +352,7 @@ test("retained orthographic frames stay aligned during pan/zoom and cannot show 
   detail.render();
   assert.equal(detail.canvas.style.transform, "translate(0px, 0px) scale(1)", "a new WebGL frame resets reprojection before the next browser composite");
   f.frame();
-  f.view.setLayer(-64); f.frame();
-  assert.equal(detail.y, -64);
-  assert.equal(detail.canvas.style.visibility, "hidden");
-  detail.render(); f.frame();
-  assert.equal(detail.canvas.style.visibility, "visible");
+
 });
 
 test("late detail imports cannot revive a zoomed-out or disposed map", async t => {

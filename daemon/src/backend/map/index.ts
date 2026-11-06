@@ -1,5 +1,5 @@
 import type { McToolsDaemonContext } from "../context";
-import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight } from "../../../../shared/map";
+import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate } from "../../../../shared/map";
 import { WorldMapService } from "./service";
 import { MapPlayerService } from "./players";
 import { MAP_PLAYERS_EVENT, MAP_RCON_ENABLE_EVENT } from "../../../../shared/map-players";
@@ -26,7 +26,7 @@ export function registerWorldMap(ctx: McToolsDaemonContext) {
           if (typeof data.world !== "string" || !/^[a-f0-9]{24}$/.test(data.world)) throw new Error("MC_MAP_INVALID");
           const scene = event === MAP_SCENE_EVENT;
           const coordinate = scene ? mapSceneCoordinate : mapCoordinate;
-          ctx.protocol.response(request, await service[scene ? "scene" : "tile"](data.instanceUuid, data.world, coordinate(data.x), coordinate(data.z), mapHeight(data.y)));
+          ctx.protocol.response(request, await service[scene ? "scene" : "tile"](data.instanceUuid, data.world, coordinate(data.x), coordinate(data.z)));
         }
       } catch (error) {
         const message = error instanceof Error && /^MC_MAP_[A-Z_]+$/.test(error.message) ? error.message : "MC_MAP_READ_FAILED";

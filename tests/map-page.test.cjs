@@ -67,17 +67,17 @@ test("public map requests omit credentials, never request a login token, and for
   assert.equal(requests[1].url.searchParams.get("map"), "survival");
   assert.equal(requests[1].url.searchParams.get("refresh"), "1");
   assert.equal(requests[2].url.searchParams.has("y"), false);
-  assert.equal(requests[3].url.searchParams.get("y"), "0");
-  assert.equal(requests[4].url.searchParams.get("y"), "-64");
+  assert.equal(requests[3].url.searchParams.has("y"), false);
+  assert.equal(requests[4].url.searchParams.has("y"), false);
   assert.equal(requests[5].url.pathname, "/api/mc-tools/map/public/scene");
-  assert.equal(requests[5].url.searchParams.get("y"), "0");
+  assert.equal(requests[5].url.searchParams.has("y"), false);
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ status: 500, data: "MC_MAP_PAGE_DISABLED" }) });
   await assert.rejects(map.worlds(signal), /MC_MAP_PAGE_DISABLED/);
   globalThis.fetch = async () => { throw new DOMException("Cancelled", "AbortError"); };
   await assert.rejects(api.publicMapCatalog(signal), { name: "AbortError" });
 });
 
-test("map links preserve a panel subpath and layer zero without private identifiers, and reject malformed or out-of-range views", () => {
+test("map links preserve a panel subpath and legacy slice links without private identifiers, and reject malformed or out-of-range views", () => {
   const { publicMapUrl, mapPageLocation, mapSettingsUrl } = loader()("panel/src/map/page.ts");
   for (const y of [undefined, 0, -64, 2047]) {
     const source = { x: -120, z: 340, zoom: 3.5, y, world, daemonId: "private-node", uuid: "private-server" };
@@ -85,17 +85,19 @@ test("map links preserve a panel subpath and layer zero without private identifi
     assert.equal(url.pathname, "/sub/panel/");
     assert.equal(url.search, "");
     const query = Object.fromEntries(new URLSearchParams(url.hash.split("?")[1]));
-    assert.deepEqual(mapPageLocation(query), { map: "survival", view: { x: -120, z: 340, zoom: 3.5, ...(y === undefined ? {} : { y }) } });
+    assert.deepEqual(mapPageLocation(query), { map: "survival", view: { x: -120, z: 340, zoom: 3.5,  } });
     assert(!url.href.includes("private")); assert(!url.href.includes("token"));
   }
+  assert.deepEqual(mapPageLocation({ y: "0" }).view, {});
+  assert.deepEqual(mapPageLocation({ y: "invalid" }).view, {});
   assert.deepEqual(mapPageLocation({}), { map: undefined, view: {} });
   for (const query of [{ map: ["survival"] }, { map: "../secret" }, { x: "1" }, { x: "1.5", z: "0" }, { x: "30000001", z: "0" },
-    { zoom: "0.5" }, { zoom: "13" }, { y: "2048" }, { y: "-2049" }, { y: "1.5" }, { y: ["0"] }, { x: "Infinity", z: "0" }, { zoom: "1e1" }]) {
+    { zoom: "0.5" }, { zoom: "13" }, { x: "Infinity", z: "0" }, { zoom: "1e1" }]) {
     assert.throws(() => mapPageLocation(query), /MC_MAP_INVALID/);
   }
   assert.equal(mapSettingsUrl("https://panel.example/sub/?token=secret#/old"), "https://panel.example/sub/#/mc-tools/map/settings");
-  const scene = new URL(publicMapUrl("survival", { x: -32, z: 64, zoom: 4, y: 0, render: "3d" }, "https://panel.example/sub/"));
-  assert.deepEqual(mapPageLocation(Object.fromEntries(new URLSearchParams(scene.hash.split("?")[1]))), { map: "survival", view: { x: -32, z: 64, zoom: 4, y: 0, render: "3d" } });
+  const scene = new URL(publicMapUrl("survival", { x: -32, z: 64, zoom: 4, render: "3d" }, "https://panel.example/sub/"));
+  assert.deepEqual(mapPageLocation(Object.fromEntries(new URLSearchParams(scene.hash.split("?")[1]))), { map: "survival", view: { x: -32, z: 64, zoom: 4, render: "3d" } });
   for (const render of [["3d"], "3D", "unknown"]) assert.throws(() => mapPageLocation({ render }), /MC_MAP_INVALID/);
 });
 
@@ -105,8 +107,8 @@ function sceneViewer(t, options = {}) {
     "./api": { mapError: error => error.message, worldMapApi: () => assert.fail("public scene used private API"),
       publicWorldMapApi: () => ({ worlds: async () => [terrain("survival")], tile, scene }) },
     "./viewport": { MapViewport: class {
-      constructor(canvas, world, load, changed, layer, loadScene) {
-        Object.assign(this, { canvas, camera: { ...world.spawn, zoom: 2 }, load, changed, layer, loadScene }); renderers.push(this);
+      constructor(canvas, world, load, changed, loadScene) {
+        Object.assign(this, { canvas, camera: { ...world.spawn, zoom: 2 }, load, changed, loadScene }); renderers.push(this);
       }
       setMode(kind) { this.kind = kind; }
       center(x, z) {
@@ -139,27 +141,26 @@ test("choosing a player switches to their world, centers fractional coordinates 
   const current = renderers.at(-1);
   assert.equal(current.world, otherWorld); assert.equal(renderers[0].disposed, true);
   assert.equal(current.camera.x, -163.5); assert.equal(current.camera.z, -92.25);
-  assert.equal(f.view.height, 71); assert.equal(f.view.markers[0].x, 400); assert.equal(f.view.markers[0].y, 300);
+  assert.equal(f.view.height, undefined); assert.equal(f.view.markers[0].x, 400); assert.equal(f.view.markers[0].y, 300);
   current.center(-150, -80); assert.equal(f.view.markers[0].x, 386.5);
 });
 
-test("shared views pass both map APIs to one persistent viewport and retain coordinates, zoom and slices across projection switches", async t => {
+test("shared views pass both map APIs to one persistent viewport and retain surface coordinates and zoom across projection switches", async t => {
   const f = sceneViewer(t, { render: "3d" }); await tick();
   const active = f.renderers[0];
   assert.equal(active.kind, "3d"); assert.equal(active.load, f.tile); assert.equal(active.loadScene, f.scene);
-  assert.equal(active.layer, 0); assert.deepEqual(active.camera, { x: 48, z: -32, zoom: 3 });
+  assert.equal(active.layer, undefined); assert.deepEqual(active.camera, { x: 48, z: -32, zoom: 3 });
   active.camera.zoom = 5; active.center(80.375, -96.125);
   for (const kind of ["2d", "3d", "2d", "3d"]) {
     f.view.renderMode = kind; await tick();
     assert.equal(f.renderers.length, 1); assert.equal(active.disposed, undefined); assert.equal(active.kind, kind);
     assert.deepEqual(active.camera, { x: 80.375, z: -96.125, zoom: 5 });
   }
-  f.view.height = -16; await tick(); assert.equal(active.layer, -16);
   await f.view.load(true); await tick();
   const refreshed = f.renderers.at(-1);
   assert.equal(f.renderers.length, 2); assert.equal(active.disposed, true);
-  assert.equal(refreshed.kind, "3d"); assert.equal(refreshed.layer, -16);
-  assert.deepEqual(f.views.at(-1), { x: 80, z: -96, zoom: 5, y: -16, render: "3d" });
+  assert.equal(refreshed.kind, "3d"); assert.equal(refreshed.layer, undefined);
+  assert.deepEqual(f.views.at(-1), { x: 80, z: -96, zoom: 5, render: "3d" });
   f.close(); assert(f.renderers.every(renderer => renderer.disposed));
 });
 
@@ -171,7 +172,7 @@ test("WebGL failure returns the existing viewport to 2D without recreating its m
   await tick();
   assert.equal(f.renderers.length, 1); assert.equal(active.disposed, undefined);
   assert.equal(f.view.renderMode, "2d"); assert.equal(active.kind, "2d");
-  assert.equal(f.view.error, "MC_MAP_WEBGL_UNAVAILABLE"); assert.equal(active.layer, 0);
+  assert.equal(f.view.error, "MC_MAP_WEBGL_UNAVAILABLE"); assert.equal(active.layer, undefined);
   assert.deepEqual(active.camera, { x: 80.375, z: -96.125, zoom: 4 });
 });
 
@@ -185,7 +186,7 @@ test("standalone maps register an anonymous immersive route and an administrator
   assert.equal(settings.meta.public, undefined); assert.equal(settings.meta.permission, 10);
 });
 
-test("the public map viewer restores shared position, zoom and Y=0, emits updated views, and never uses private APIs", async t => {
+test("the public map viewer restores shared position and zoom while ignoring legacy Y=0, emits updated views, and never uses private APIs", async t => {
   const renderers = [], views = [], signals = [];
   const Component = component("WorldMapView.vue", {
     "./api": {
@@ -203,12 +204,10 @@ test("the public map viewer restores shared position, zoom and Y=0, emits update
   const f = mount(t, Component, { publicMap: "survival", initialView: { x: -128, z: 256, y: 0, zoom: 4 }, onView: value => views.push(value) });
   f.view.canvas = {};
   await tick();
-  assert.equal(renderers.length, 1); assert.equal(renderers[0].layer, 0);
+  assert.equal(renderers.length, 1); assert.equal(renderers[0].layer, undefined);
   assert.deepEqual(renderers[0].camera, { x: -128, z: 256, zoom: 4 });
-  assert.equal(f.view.mode, "slice"); assert.equal(f.view.y, "0");
-  assert.deepEqual(views.at(-1), { x: -128, z: 256, zoom: 4, y: 0 });
-  f.view.height = -64; await vue.nextTick();
-  assert.equal(views.at(-1).y, -64);
+  assert.equal(f.view.mode, undefined); assert.equal(f.view.y, undefined);
+  assert.deepEqual(views.at(-1), { x: -128, z: 256, zoom: 4 });
   f.close(); assert(signals.every(signal => signal.aborted)); assert.equal(renderers[0].disposed, true);
 });
 
@@ -224,7 +223,7 @@ test("the public page handles disabled and unknown maps and rejects stale catalo
   reads[1].resolve({ enabled: true, maps: [{ id: "survival", name: "Survival" }] }); await tick();
   reads[0].resolve({ enabled: true, maps: [{ id: "old", name: "Old" }] }); await tick();
   assert.equal(f.view.selected, "survival");
-  assert.deepEqual(f.view.initialView, { x: 10, z: -20, y: 0, zoom: 3 });
+  assert.deepEqual(f.view.initialView, { x: 10, z: -20, zoom: 3 });
   f.view.choose("another"); assert.deepEqual(replacements, [{ path: "/mc-tools/map", query: { map: "another" } }]);
   const pending = f.view.load(); reads[2].resolve({ enabled: false, maps: [] }); await pending;
   assert.equal(f.view.error, "MC_MAP_PAGE_DISABLED"); assert.equal(f.view.selected, "");

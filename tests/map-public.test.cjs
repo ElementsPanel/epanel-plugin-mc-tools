@@ -101,13 +101,15 @@ function routesFixture() {
 
 test("public player reads are scoped to the published world and aliases, and revocation during a read hides results", async () => {
   const f = routesFixture(); f.configure({ mapPageEnabled: true });
-  f.respond(async () => ({ edition: "java", running: true, rconEnabled: true, warnings: [], players: [
+  f.respond(async () => ({ edition: "java", running: true, rconEnabled: true, warnings: [], worldTimes: { [world]: 0, [hiddenWorld]: 6000 }, players: [
     { name: "Steve", position: { x: 1, y: 64, z: 2, world, dimension: "minecraft:overworld" } },
     { name: "Alex", position: { x: 5, y: 64, z: 6, world: hiddenWorld, dimension: "minecraft:the_nether" } }, { name: "Unknown" }
   ] }));
   const result = (await f.request("/players", { map: "survival", uuid: "injected", world: hiddenWorld, daemonId: "injected" })).body;
   assert.deepEqual(result.players.map(player => player.name), ["Steve"]);
   assert.equal(result.players[0].position.world, "survival");
+  assert.deepEqual(result.worldTimes, { survival: 0 });
+  assert(!JSON.stringify(result).includes(hiddenWorld));
   assert.deepEqual(f.calls[0], { event: "mc-tools/map/players", data: { instanceUuid: "server", world } });
   const gate = deferred(); f.respond(() => gate.promise);
   const read = f.request("/players", { map: "survival" });
@@ -128,10 +130,10 @@ test("anonymous map routes reveal only configured aliases and use the configured
   ]);
   assert.deepEqual(f.calls[0], { event: "mc-tools/map/worlds", data: { instanceUuid: "server" } });
   assert.deepEqual((await f.request("/tile", { ...injected, x: "-1", z: "2", y: "0" })).body, { image: "png", chunks: 1, warnings: 0 });
-  assert.deepEqual(f.calls[1], { event: "mc-tools/map/tile", data: { instanceUuid: "server", world, x: -1, z: 2, y: 0 } });
+  assert.deepEqual(f.calls[1], { event: "mc-tools/map/tile", data: { instanceUuid: "server", world, x: -1, z: 2 } });
   assert.equal(f.checks.length, 0);
   for (const map of [world, hiddenWorld, "unlisted"]) assert.equal((await f.request("/worlds", { map })).body.message, "MC_MAP_PUBLIC_NOT_FOUND");
-  for (const query of [{ map: ["survival"] }, { map: "../outside" }, { map: "survival", x: "1.5", z: "0" }, { map: "survival", x: "0", z: "0", y: "2048" }, { map: "survival", x: "0", z: ["0"] }]) {
+  for (const query of [{ map: ["survival"] }, { map: "../outside" }, { map: "survival", x: "1.5", z: "0" }, { map: "survival", x: "0", z: ["0"] }]) {
     assert.equal((await f.request("/tile", query)).body.message, "MC_MAP_INVALID");
   }
   assert.equal(f.calls.length, 2);
@@ -158,10 +160,10 @@ test("anonymous 3D scenes use only the configured save, validate scene coordinat
   const scene = { version: 1, quads: "mesh", heights: "height", chunks: 4, warnings: 0, limited: false };
   f.respond(async () => ({ ...scene, root: "/private/save", world: hiddenWorld }));
   assert.deepEqual((await f.request("/scene", { map: "survival", x: "-937500", z: "0", y: "0", world: hiddenWorld, uuid: "other", daemonId: "other" })).body, scene);
-  assert.deepEqual(f.calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world, x: -937500, z: 0, y: 0 } });
+  assert.deepEqual(f.calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world, x: -937500, z: 0 } });
   assert.equal(f.checks.length, 0);
   assert.equal((await f.request("/scene", { map: "unlisted", x: "0", z: "0" })).body.message, "MC_MAP_PUBLIC_NOT_FOUND");
-  for (const query of [{ x: "937501", z: "0" }, { x: "0", z: "0", y: "2048" }, { x: ["0"], z: "0" }]) {
+  for (const query of [{ x: "937501", z: "0" }, { x: ["0"], z: "0" }]) {
     assert.equal((await f.request("/scene", { map: "survival", ...query })).body.message, "MC_MAP_INVALID");
   }
   assert.equal(f.calls.length, 1);

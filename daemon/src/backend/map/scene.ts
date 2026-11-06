@@ -10,8 +10,8 @@ export interface SceneChunk { x: number; z: number; layers: BlockLayer[] }
 const SIZE = MAP_SCENE_SIZE, AREA = SIZE * SIZE;
 const STRIDE = SIZE + 2, PADDED_AREA = STRIDE * STRIDE;
 /** Cull hidden voxel faces, then merge coplanar faces of the same block material. */
-export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: number, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "tints" | "heights" | "limited">> {
-  const cap = sliceY ?? (nether ? 120 : MAP_MAX_Y);
+export async function meshScene(chunks: SceneChunk[], nether = false, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "tints" | "heights" | "limited">> {
+  const cap = nether ? 120 : MAP_MAX_Y;
   const layers = chunks.flatMap(chunk => chunk.layers).filter(layer => !layer.empty && layer.y * 16 <= cap);
   const minY = layers.length ? Math.max(MAP_MIN_Y, Math.min(...layers.map(layer => layer.y * 16))) : 0;
   const maxY = layers.length ? Math.min(cap, Math.max(...layers.map(layer => layer.y * 16 + 15))) : -1;
@@ -99,7 +99,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
   for (let z = -1; z <= SIZE; z++) for (let x = -1; x <= SIZE; x++) {
     const owned = x >= 0 && x < SIZE && z >= 0 && z < SIZE, column = z * SIZE + x;
     if (owned) heights.writeInt16LE(-32768, column * 2);
-    let open = !nether || sliceY !== undefined;
+    let open = !nether;
     for (let y = height - 1; y >= 0; y--) {
       const index = indexOf(x, y, z), id = voxels[index] || fluids?.[index];
       // The default Nether view opens its ceiling, as the 2D surface view does.

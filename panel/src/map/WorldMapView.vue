@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
-import { VAlert, VBtn, VCard, VCardActions, VCardText, VDialog, VList, VListItem, VMenu, VProgressLinear, VSelect, VSlider, VSpacer, VTextField } from "vuetify/components";
+import { VAlert, VBtn, VCard, VCardActions, VCardText, VDialog, VIcon, VList, VListItem, VMenu, VProgressLinear, VSpacer, VTextField } from "vuetify/components";
 import type { MapWorld, MapViewOptions } from "../../../shared/map";
 import type { MapPlayer } from "../../../shared/map-players";
-import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y } from "../../../shared/map";
+import { MAP_LIMIT } from "../../../shared/map";
 import { t } from "../settings";
 import { mapError, publicWorldMapApi, worldMapApi } from "./api";
 import { MapViewport, type MapViewState } from "./viewport";
@@ -16,7 +16,7 @@ import { playerMarkers, worldForPlayer } from "./player-markers";
 const props = withDefaults(defineProps<{ instanceUuid?: string; daemonId?: string; publicMap?: string; initialView?: MapViewOptions; fullscreen?: boolean; sidebarOpen?: boolean }>(), { sidebarOpen: undefined });
 const emit = defineEmits<{ view: [value: MapViewOptions]; "update:sidebarOpen": [value: boolean] }>();
 const api = props.publicMap ? publicWorldMapApi(props.publicMap) : worldMapApi(props.instanceUuid!, props.daemonId!);
-const { roster, reading: readingPlayers, enabling, prompt: rconPrompt, error: playerError, success: playerSuccess,
+const { roster, worldTimes, reading: readingPlayers, enabling, prompt: rconPrompt, error: playerError, success: playerSuccess,
   search: playerSearch, players, load: loadPlayers, enable: enableRcon, dismissError: dismissPlayerError } = useMapPlayers(api, mapError);
 const abort = new AbortController();
 const canvas = ref<HTMLCanvasElement>();
@@ -24,20 +24,20 @@ const mapRoot = ref<HTMLElement>();
 const toolsOpen = ref(false);
 const worlds = ref<MapWorld[]>([]);
 const selected = ref("");
+const worldTimeIcon = computed(() => worldTimes.value[selected.value] === undefined ? "mdi-clock-outline"
+  : worldTimes.value[selected.value] < 12000 ? "mdi-white-balance-sunny" : "mdi-weather-night");
+const worldTime = computed(() => {
+  const ticks = worldTimes.value[selected.value];
+  if (ticks === undefined || !Number.isInteger(ticks) || ticks < 0 || ticks >= 24000) return;
+  // A Minecraft day starts at 06:00; 1,000 ticks equal one in-game hour.
+  const minutes = (Math.floor(ticks * 60 / 1000) + 360) % 1440;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+});
+const worldTimeLabel = computed(() => `${t("MC_MAP_WORLD_TIME")}: ${worldTime.value ?? t("MC_MAP_TIME_UNAVAILABLE")}`);
 const loading = ref(true);
 const error = ref("");
 const x = ref(String(props.initialView?.x ?? 0)), z = ref(String(props.initialView?.z ?? 0));
-const mode = ref<"surface" | "slice">(props.initialView?.y === undefined ? "surface" : "slice");
 const renderMode = ref<"2d" | "3d">(props.initialView?.render ?? "2d");
-const height = ref(props.initialView?.y ?? 64);
-const y = ref(String(height.value));
-const heightError = ref("");
-const range = reactive({ min: -64, max: 319 });
-const layer = computed(() => mode.value === "slice" ? height.value : undefined);
-const modes = computed(() => [
-  { value: "surface", title: t("MC_MAP_SURFACE") },
-  { value: "slice", title: t("MC_MAP_SLICE") }
-]);
 const state = reactive({ x: 0, z: 0, zoom: 2, bearing: 0, loading: 0, warnings: 0, limited: false, empty: false });
 const heading = computed(() => ((Math.round(state.bearing * 180 / Math.PI) % 360) + 360) % 360);
 const headingLabel = computed(() => `${t("MC_MAP_HEADING")}: ${heading.value}° · ${t("MC_MAP_RESET_NORTH")}`);
@@ -54,7 +54,6 @@ function locatePlayer(player: MapPlayer) {
   if (!world || !player.position || loading.value) return;
   const position = player.position;
   x.value = String(Math.floor(position.x)); z.value = String(Math.floor(position.z));
-  if (mode.value === "slice" && height.value < position.y + 1) height.value = Math.min(MAP_MAX_Y, Math.ceil(position.y + 1));
   if (selected.value !== world.id) { nextCenter = position; selected.value = world.id; }
   else viewport?.center(position.x, position.z);
 }
@@ -68,7 +67,7 @@ let drawing = 0;
 let reading = false;
 let firstLoad = true;
 const current = computed(() => worlds.value.find((world) => world.id === selected.value));
-const view = (): MapViewOptions => ({ x: state.x, z: state.z, zoom: state.zoom, y: layer.value, ...(renderMode.value === "3d" ? { render: "3d" } : {}) });
+const view = (): MapViewOptions => ({ x: state.x, z: state.z, zoom: state.zoom, ...(renderMode.value === "3d" ? { render: "3d" } : {}) });
 const items = computed(() => worlds.value.map((world) => {
   const key = ({ "minecraft:overworld": "MC_MAP_OVERWORLD", "minecraft:the_nether": "MC_MAP_NETHER", "minecraft:the_end": "MC_MAP_END" } as Record<string, string>)[world.dimension];
   return { value: world.id, title: `${world.name} · ${key ? t(key) : world.dimension}` };
@@ -91,7 +90,7 @@ async function draw(center?: { x: number; z: number }, zoom?: number, bearing = 
       if (value.error instanceof Error && value.error.message === "MC_MAP_WEBGL_UNAVAILABLE") renderMode.value = "2d";
     }
   };
-  viewport = new MapViewport(canvas.value, current.value, api.tile, changed, layer.value, api.scene);
+  viewport = new MapViewport(canvas.value, current.value, api.tile, changed, api.scene);
   if (zoom !== undefined) viewport.camera.zoom = zoom;
   if (bearing) viewport.setBearing(bearing);
   if (center) viewport.center(center.x, center.z);
@@ -143,38 +142,10 @@ function spawn() {
   go();
 }
 
-function applyHeight() {
-  const input = String(y.value ?? "").trim();
-  const value = Number(input);
-  if (!input || !Number.isInteger(value) || value < MAP_MIN_Y || value > MAP_MAX_Y) {
-    heightError.value = t("MC_MAP_HEIGHT_INVALID");
-    return;
-  }
-  heightError.value = "";
-  range.min = Math.min(range.min, value);
-  range.max = Math.max(range.max, value);
-  height.value = value;
-  y.value = String(value);
-}
-
-watch(current, (world) => {
-  if (!world) return;
-  const overworld = world.dimension === "minecraft:overworld";
-  const custom = !["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"].includes(world.dimension);
-  range.min = Math.min(custom ? MAP_MIN_Y : overworld ? -64 : 0, height.value);
-  range.max = Math.max(custom ? MAP_MAX_Y : overworld ? 319 : 255, height.value);
-}, { flush: "sync" });
-watch(layer, (value) => {
-  y.value = String(height.value);
-  heightError.value = "";
-  error.value = "";
-  state.warnings = 0;
-  viewport?.setLayer(value);
-}, { flush: "sync" });
 watch(selected, () => { if (!loading.value) { error.value = ""; void draw(nextCenter); nextCenter = undefined; } }, { flush: "sync" });
 watch([roster, current], updateMarkers);
 watch(renderMode, value => viewport?.setMode(value));
-watch([() => state.x, () => state.z, () => state.zoom, layer, renderMode], () => emit("view", view()));
+watch([() => state.x, () => state.z, () => state.zoom, renderMode], () => emit("view", view()));
 onMounted(() => { void load(); });
 onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 </script>
@@ -220,6 +191,10 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
       </VList>
     </MapControls>
     <div class="mc-map-surface">
+      <div v-if="current && !loading" class="mc-map-time" role="timer" :aria-label="worldTimeLabel" :title="worldTimeLabel">
+        <VIcon :icon="worldTimeIcon" size="18" aria-hidden="true" />
+        <span>{{ worldTime ?? '--:--' }}</span>
+      </div>
       <div v-if="error || state.warnings || state.limited || playerError || playerSuccess" class="mc-map-notice">
         <VAlert v-if="error" type="error" density="compact" role="alert">{{ error }}</VAlert>
         <VAlert v-else-if="state.warnings || state.limited" type="warning" density="compact">{{ t(state.limited ? "MC_MAP_SCENE_LIMIT" : "MC_MAP_PARTIAL") }}</VAlert>
@@ -240,7 +215,7 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
       <VMenu v-model="toolsOpen" location="top start" :offset="12" :close-on-content-click="false" :attach="mapRoot" contained>
         <template #activator="{ props: menuProps }">
           <VBtn v-bind="menuProps" class="mc-map-position" prepend-icon="mdi-tune-variant" :title="t('MC_MAP_POSITION_SETTINGS')" :aria-label="t('MC_MAP_POSITION_SETTINGS')" :aria-expanded="toolsOpen">
-            <template v-if="current">X: {{ state.x }} · Z: {{ state.z }} · {{ layer === undefined ? t("MC_MAP_SURFACE") : 'Y: ' + layer }} · {{ state.zoom.toFixed(1) }}×</template>
+            <template v-if="current">X: {{ state.x }} · Z: {{ state.z }} · {{ t("MC_MAP_SURFACE") }} · {{ state.zoom.toFixed(1) }}×</template>
             <template v-else>{{ t("MC_MAP_POSITION_SETTINGS") }}</template>
           </VBtn>
         </template>
@@ -255,20 +230,7 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
             <VBtn variant="text" :disabled="!current" @click="spawn">{{ t("MC_MAP_SPAWN") }}</VBtn>
             <VBtn variant="text" :loading="loading" @click="load(true)">{{ t("MC_MAP_REFRESH") }}</VBtn>
           </div>
-          <div class="mc-map-layers">
-            <VSelect v-model="mode" :items="modes" :label="t('MC_MAP_VIEW')" :disabled="loading || !current" hide-details density="compact" variant="outlined" class="mc-map-mode-select" />
-            <template v-if="mode === 'slice'">
-              <VSlider v-model="height" :min="range.min" :max="range.max" :step="1" thumb-label :aria-label="t('MC_MAP_HEIGHT')" :disabled="loading || !current" hide-details color="primary" class="mc-map-layer-slider">
-                <template #prepend><span class="mc-map-range">{{ range.min }}</span></template>
-                <template #append><span class="mc-map-range">{{ range.max }}</span></template>
-              </VSlider>
-              <form class="mc-map-height" @submit.prevent="applyHeight">
-                <VTextField v-model="y" :label="t('MC_MAP_HEIGHT')" type="number" :min="MAP_MIN_Y" :max="MAP_MAX_Y" step="1" :disabled="loading || !current" :error-messages="heightError" hide-details="auto" density="compact" variant="outlined" @change="applyHeight" @keydown.enter.prevent="applyHeight" />
-              </form>
-            </template>
-          </div>
-          <p v-if="mode === 'slice'" class="mc-map-layer-hint">{{ t(renderMode === '3d' ? "MC_MAP_3D_SLICE_HINT" : "MC_MAP_SLICE_HINT") }}</p>
-          <p v-if="renderMode === '3d'" class="mc-map-layer-hint">{{ t("MC_MAP_3D_HINT") }}</p>
+          <p v-if="renderMode === '3d'" class="mc-map-input-hint">{{ t("MC_MAP_3D_HINT") }}</p>
         </VCard>
       </VMenu>
       <template v-if="current && !loading">
@@ -296,12 +258,7 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px; }
 .mc-map-coordinates { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; }
 .mc-map-coordinates :deep(.v-input) { min-width: 60px; flex: 1; }
-.mc-map-layers { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; }
-.mc-map-mode-select { flex: 0 0 112px; min-width: 0; }
-.mc-map-layer-slider { flex: 1; min-width: 0; }
-.mc-map-range, .mc-map-layer-slider :deep(.v-input__prepend), .mc-map-layer-slider :deep(.v-input__append) { display: none; }
-.mc-map-height { flex: 0 0 76px; }
-.mc-map-layer-hint { margin: -4px 12px 12px; font-size: 12px; opacity: 0.75; }
+.mc-map-input-hint { margin: -4px 12px 12px; font-size: 12px; opacity: 0.75; }
 .mc-map-surface { position: relative; flex: 1; min-height: 280px; background: #19252a; overflow: hidden; }
 .mc-map-surface canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; cursor: grab; touch-action: none; }
 .mc-map-progress { position: absolute; inset: 0 0 auto; z-index: 2; }
@@ -315,7 +272,8 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-players-status p { margin: 8px 0; }
 .mc-map-list-avatar { margin-right: 12px; }
 .mc-map-locate-hint { font-size: 12px; opacity: 0.7; margin-left: 8px; }
-.mc-map-notice { position: absolute; top: 12px; left: 84px; right: 84px; z-index: 3; max-width: 620px; }
+.mc-map-time { position: absolute; top: var(--mc-map-control-gap); left: 50%; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: var(--mc-map-control-radius); font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; user-select: none; pointer-events: none; }
+.mc-map-notice { position: absolute; top: 60px; left: 84px; right: 84px; z-index: 3; max-width: 620px; }
 .mc-map-view-controls { position: absolute; top: var(--mc-map-control-gap); right: var(--mc-map-control-gap); z-index: 3; display: flex; flex-direction: column; gap: 8px; }
 .mc-map-render-toggle, .mc-map-heading { min-width: 48px; padding: 8px; font-weight: 600; }
 .mc-map-heading-content { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -329,7 +287,7 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-zoom { position: absolute; right: var(--mc-map-control-gap); bottom: var(--mc-map-control-gap); display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: var(--mc-map-control-radius); overflow: hidden; }
 .mc-map-tools-card.v-card { width: min(400px, calc(100vw - 24px)); max-height: min(70dvh, 540px); overflow-y: auto; overscroll-behavior: contain; border-radius: 18px !important; }
 .mc-map-position :deep(.v-btn__content) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
-.mc-map-position, .mc-map-zoom, .mc-map-render-toggle, .mc-map-heading { color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
+.mc-map-position, .mc-map-zoom, .mc-map-render-toggle, .mc-map-heading, .mc-map-time { color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-surface), 0.96); box-shadow: 0 3px 16px #0004; }
 .mc-map-zoom :deep(.v-btn) { color: inherit; }
 .mc-world-map-fullscreen { position: absolute; inset: 0; min-height: 0; }
 .mc-world-map-fullscreen .mc-map-surface { position: absolute; inset: 0; min-height: 0; }

@@ -9,7 +9,7 @@ const { SceneKind, minecraftAssets, sceneTextures, SCENE_GRASS_OVERLAY, SCENE_GR
 const { MAP_SCENE_MAX_QUADS, mapSceneCoordinate } = load("shared/map.ts");
 const layer = (y, block) => ({ y, block: typeof block === "function" ? index => block(index & 15, index >> 8, (index >> 4) & 15) : () => block });
 const chunk = (layers, x = 0, z = 0) => ({ x, z, layers });
-const tile = async (chunks, nether = false, y, neighbors = []) => ({ ...await meshScene(chunks, nether, y, undefined, neighbors), chunks: chunks.length, warnings: 0 });
+const tile = async (chunks, nether = false, neighbors = []) => ({ ...await meshScene(chunks, nether, undefined, neighbors), chunks: chunks.length, warnings: 0 });
 function quads(tile) {
   const b = Buffer.from(tile.quads, "base64");
   return Array.from({ length: b.length / 16 }, (_, i) => {
@@ -51,18 +51,6 @@ test("3D geometry retains hidden cavities and overhangs even when their 2D surfa
   assert(quads(result).some(q => q.face === 3 && q.y === 3 && q.x === 2 && q.z === 2), "cavity ceiling has a visible underside");
 });
 
-test("3D cutaways cap the exact requested layer, including zero, negative heights and empty layers", async () => {
-  const chunks = [chunk([layer(-1, "stone"), layer(0, "diamond_block")])];
-  for (const y of [-16, -1, 0, 7]) {
-    const result = await tile(chunks, false, y), decoded = decodeScene(result);
-    assert.equal(decoded.heights[0], y);
-    assert(quads(result).some(q => q.face === 2 && q.y === y + 1));
-    for (const part of decoded.meshes) assert(part.maxY <= y + 1);
-  }
-  const empty = decodeScene(await tile(chunks, false, -17));
-  assert.equal(empty.count, 0); assert(empty.heights.every(y => y === -32768));
-});
-
 test("water retains the solid faces beneath it, foliage uses cutouts and small plants use crossed planes", async () => {
   const result = await tile([chunk([layer(0, (x, y, z) => {
     if (z !== 1) return "air";
@@ -88,15 +76,12 @@ test("water joins across scene boundaries and biome colors without duplicate int
   assert(exposed.some(q => q.face === 0 && q.x === 32), "a true outer water edge remains visible");
   assert(!exposed.some(q => q.face < 2 && q.x === 16), "biome tint changes do not create water walls");
   const adjacent = [chunk([water("minecraft:plains")], 2), chunk([water("minecraft:plains")], 2, 1)];
-  const joined = await tile(chunks, false, undefined, adjacent), faces = quads(joined);
+  const joined = await tile(chunks, false, adjacent), faces = quads(joined);
   assert(!faces.some(q => q.face === 0 && q.x === 32), "the adjacent scene hides the shared east face");
   assert(faces.some(q => q.face === 2 && q.y === 16), "the water surface stays visible");
   assert.equal(joined.chunks, 4);
   assert(faces.every(q => q.x <= 32 && q.z <= 32), "neighboring geometry is not emitted twice");
   assert.equal(decodeScene(joined).count, faces.length);
-  const cut = quads(await tile(chunks, false, 0, adjacent));
-  assert(!cut.some(q => q.face === 0 && q.x === 32));
-  assert(cut.some(q => q.face === 2 && q.y === 1));
 });
 
 test("underwater plants coexist with a continuous water volume instead of carving air holes", async () => {
@@ -162,7 +147,7 @@ test("26.3 dappled forest uses its own grass, foliage and water colors through N
     const layers = chunkLayers({ DataVersion: 5023, sections: [{ Y: 0,
       block_states: { palette: ["minecraft:" + name] }, biomes: { palette: ["minecraft:dappled_forest"] }
     }] });
-    const result = await tile([chunk(layers)], false, 0), faces = quads(result);
+    const result = await tile([chunk(layers)]), faces = quads(result);
     const tinted = faces.filter(face => name === "short_grass" ? face.face >= 6 : face.face === 2);
     assert(tinted.length > 0, name);
     assert(tinted.every(face => face.tint === color), name);
@@ -184,7 +169,7 @@ test("grass and foliage transition across biome borders while preserving interio
       block_states: { palette: ["minecraft:" + block] },
       biomes: { palette: ["minecraft:dappled_forest", "minecraft:plains"], data: [packed] }
     }] });
-    const faces = quads(await tile([chunk(layers)], false, 0));
+    const faces = quads(await tile([chunk(layers)]));
     const tops = faces.filter(face => face.face === 2);
     const color = x => tops.find(face => x >= face.x && x < face.x + face.h && face.z <= 7 && face.z + face.w > 7).tint;
     assert.equal(color(0), first); assert.equal(color(15), second);
@@ -215,7 +200,7 @@ test("biome blending crosses adjoining scene tiles at negative coordinates witho
       const entry = chunk([blocks], x - origin, z);
       (entry.x >= 0 && entry.x < 2 && z >= 0 && z < 2 ? owned : neighbors).push(entry);
     }
-    const result = await tile(owned, false, -1, neighbors), tops = quads(result).filter(face => face.face === 2);
+    const result = await tile(owned, false, neighbors), tops = quads(result).filter(face => face.face === 2);
     for (let x = 0; x < 32; x++) {
       const worldX = x + origin * 16;
       const face = tops.find(face => x >= face.x && x < face.x + face.h && face.z <= 16 && face.z + face.w > 16);
@@ -229,12 +214,12 @@ test("biome blending crosses adjoining scene tiles at negative coordinates witho
 test("air-section biomes blend neighboring treetops without creating terrain or a plains-colored unloaded rim", async () => {
   const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
   const section = (Y, block, biome) => ({ Y, block_states: { palette: ["minecraft:" + block] }, biomes: { palette: ["minecraft:" + biome] } });
-  const own = chunkLayers({ DataVersion: 5023, sections: [section(-1, "oak_leaves", "dappled_forest"), section(50, "air", "plains")] }, undefined, true);
+  const own = chunkLayers({ DataVersion: 5023, sections: [section(-1, "oak_leaves", "dappled_forest"), section(50, "air", "plains")] }, true);
   const air = { DataVersion: 5023, sections: [section(-1, "air", "plains")] };
   assert.equal(chunkLayers(air).length, 0, "ordinary surface extraction still skips air sections");
-  const adjacent = chunkLayers(air, undefined, true);
+  const adjacent = chunkLayers(air, true);
   assert.equal(adjacent[0].empty, true); assert.equal(adjacent[0].biome(123), "minecraft:plains");
-  const result = await tile([chunk(own)], false, undefined, [chunk(adjacent, 1)]);
+  const result = await tile([chunk(own)], false, [chunk(adjacent, 1)]);
   const faces = quads(result), tops = faces.filter(face => face.face === 2);
   const first = minecraftAssets.biomes["minecraft:dappled_forest"][1], second = minecraftAssets.biomes["minecraft:plains"][1];
   assert(tops.some(face => face.x === 0 && face.tint === first), "missing western chunks do not change the biome's own color");
@@ -301,10 +286,7 @@ test("pink petals and wildflowers lie on their supporting block like litter with
     assert(faces.some(face => face.face === 2 && face.y === baseY && face.kind === SceneKind.Opaque), "transparent petal pixels reveal the supporting grass");
     const mesh = decodeScene(result).meshes.find(part => part.kind === SceneKind.Plant);
     assert.equal(mesh.minY, baseY); assert.equal(mesh.maxY, baseY + 1 / 64, "the only height offset is the existing anti-z-fighting offset");
-    const cut = quads(await tile([chunk([blocks])], false, baseY - 1));
-    assert(cut.every(face => face.kind !== SceneKind.Plant), "a cut below the decoration excludes it");
-    const atPlant = quads(await tile([chunk([blocks])], false, baseY));
-    assert(atPlant.some(face => face.face === 2 && face.y === baseY && face.flags & SCENE_GROUND));
+
   }
 });
 
@@ -438,14 +420,11 @@ test("ambient occlusion darkens the corners of a recess without shading an isola
   assert(decodeScene(corner).meshes.some(mesh => mesh.occlusion.some(value => value !== 0)));
 });
 
-test("the 3D Nether overview removes its roof, while explicit cutaways preserve selected roof blocks", async () => {
+test("the 3D Nether surface removes its roof", async () => {
   const chunks = [chunk([layer(7, "bedrock"), layer(5, "netherrack")])];
   const overview = await tile(chunks, true);
   assert.equal(decodeScene(overview).heights[0], 95);
   assert(quads(overview).every(q => q.y <= 96));
-  const sliced = await tile(chunks, true, 120);
-  assert.equal(decodeScene(sliced).heights[0], 120);
-  assert(quads(sliced).some(q => q.face === 2 && q.y === 121));
 });
 
 test("scene decoding rejects unbounded or malformed geometry before building render buffers", async () => {
@@ -459,5 +438,5 @@ test("scene decoding rejects unbounded or malformed geometry before building ren
   ]) assert.throws(() => decodeScene(bad), /MC_MAP_CORRUPT/);
   for (const value of [null, "0", Infinity, 0.5, 937501, -937501]) assert.throws(() => mapSceneCoordinate(value), /MC_MAP_INVALID/);
   assert.equal(mapSceneCoordinate(-937500), -937500);
-  await assert.rejects(meshScene([chunk([layer(0, "stone")])], false, undefined, () => true), /MC_MAP_UNAVAILABLE/);
+  await assert.rejects(meshScene([chunk([layer(0, "stone")])], false, () => true), /MC_MAP_UNAVAILABLE/);
 });

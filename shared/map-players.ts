@@ -12,5 +12,9 @@ export interface MapPlayerRoster {
   rconEnabled: boolean;
   players: MapPlayer[];
   warnings: string[];
+  /** Live time of day in ticks (0–23999), keyed by saved world ID. */
+  worldTimes?: Record<string, number>;
+  /** Server sample identity/time; preserved by caches so clients can infer clock speed. */
+  worldTimeSampledAt?: number;
 }
 export interface EnableRconResult { changed: boolean; restartRequested: boolean }

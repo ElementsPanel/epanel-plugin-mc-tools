@@ -70,6 +70,25 @@ function playerWorld(worlds: SavedWorld[], dimension: string, levelName: string)
   }) ?? (candidates.length === 1 ? candidates[0] : undefined);
 }
 
+export async function readRconWorldTimes(command: (value: string) => Promise<string>, worlds: SavedWorld[], levelName: string) {
+  const times: Record<string, number> = {};
+  for (const dimension of new Set(worlds.map(world => world.dimension))) {
+    if (!/^[a-z0-9_.-]+:[a-z0-9_./-]{1,128}$/.test(dimension)) continue;
+    const world = playerWorld(worlds, dimension, levelName);
+    if (!world) continue;
+    // 26.2 uses the dimension's default clock; older servers expose daytime.
+    for (const query of ["time", "daytime"]) {
+      const response = consoleLine(await command(`execute in ${dimension} run time query ${query}`));
+      const match = response.match(/^(?:Clock [a-z0-9_.-]+:[a-z0-9_./-]+ is at (-?\d{1,19}) tick\(s\)|The time is (-?\d{1,19}))$/);
+      if (!match) continue;
+      const ticks = BigInt(match[1] ?? match[2]);
+      times[world.id] = Number((ticks % 24000n + 24000n) % 24000n);
+      break;
+    }
+  }
+  return times;
+}
+
 export class MapPlayerService {
   private disposed = false;
   private revision = 0;
@@ -139,7 +158,8 @@ export class MapPlayerService {
     }
     if (!worldId) return value;
     if (!(await this.worlds(id)).some(world => world.id === worldId)) throw new Error("MC_MAP_WORLD_MISSING");
-    return { ...value, players: value.players.filter(player => player.position?.world === worldId) };
+    return { ...value, players: value.players.filter(player => player.position?.world === worldId),
+      worldTimes: value.worldTimes?.[worldId] === undefined ? {} : { [worldId]: value.worldTimes[worldId] } };
   }
 
   private async read(id: string, instance: Instance): Promise<MapPlayerRoster> {
@@ -155,18 +175,21 @@ export class MapPlayerService {
     if (!target.enabled || !roster.running) { this.closeSession(id); return roster; }
     let session: Session | undefined;
     try {
-      session = this.session(id, instance, root, target);
-      Object.assign(roster, await session.connection.run(readRconPlayers));
       const worlds = await this.worlds(id);
+      session = this.session(id, instance, root, target);
+      Object.assign(roster, await session.connection.run(async command => ({
+        ...await readRconPlayers(command), worldTimes: await readRconWorldTimes(command, worlds, target.levelName), worldTimeSampledAt: Date.now()
+      })));
       session.abort.signal.throwIfAborted();
       for (const player of roster.players) if (player.position) player.position.world = playerWorld(worlds, player.position.dimension, target.levelName)?.id;
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       roster.players = [];
+      delete roster.worldTimes;
       roster.warnings.push(/^MC_MAP_RCON_[A-Z_]+$/.test(message) ? message : "MC_MAP_RCON_UNAVAILABLE");
     } finally { if (session?.connection.closed && this.sessions.get(id) === session) this.closeSession(id); }
     roster.running = instance.status() === 3;
-    if (!roster.running) { roster.players = []; roster.warnings = []; }
+    if (!roster.running) { roster.players = []; roster.warnings = []; delete roster.worldTimes; }
     if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
     return roster;
   }

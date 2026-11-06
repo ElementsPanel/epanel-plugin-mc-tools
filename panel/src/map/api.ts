@@ -48,11 +48,11 @@ export function worldMapApi(instanceUuid: string, daemonId: string) {
       if (refresh) api.reset();
       return api.request<MapWorld[]>("worlds", { ...scope, refresh: refresh ? "1" : "0" }, signal);
     },
-    scene: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => api.request<MapSceneTile>("scene", {
-      ...scope, world, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    scene: (world: string, x: number, z: number, signal: AbortSignal) => api.request<MapSceneTile>("scene", {
+      ...scope, world, x: String(x), z: String(z)
     }, signal),
-    tile: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => api.request<MapTile>("tile", {
-      ...scope, world, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    tile: (world: string, x: number, z: number, signal: AbortSignal) => api.request<MapTile>("tile", {
+      ...scope, world, x: String(x), z: String(z)
     }, signal)
   };
 }
@@ -85,11 +85,11 @@ export function publicWorldMapApi(map: string) {
   return {
     players: (signal: AbortSignal) => publicRequest<MapPlayerRoster>("players", { map }, signal),
     worlds: (signal: AbortSignal, refresh = false) => publicRequest<MapWorld[]>("worlds", { map, refresh: refresh ? "1" : "0" }, signal),
-    scene: (_world: string, x: number, z: number, signal: AbortSignal, y?: number) => publicRequest<MapSceneTile>("scene", {
-      map, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    scene: (_world: string, x: number, z: number, signal: AbortSignal) => publicRequest<MapSceneTile>("scene", {
+      map, x: String(x), z: String(z)
     }, signal),
-    tile: (_world: string, x: number, z: number, signal: AbortSignal, y?: number) => publicRequest<MapTile>("tile", {
-      map, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })
+    tile: (_world: string, x: number, z: number, signal: AbortSignal) => publicRequest<MapTile>("tile", {
+      map, x: String(x), z: String(z)
     }, signal)
   };
 }

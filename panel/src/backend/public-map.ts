@@ -1,4 +1,4 @@
-import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight, parseMapSource, publicMapId, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
+import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, parseMapSource, publicMapId, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import type { MapPanelContext } from "./index";
 import type { McToolsSettings } from "./settings";
 import { MAP_PLAYERS_EVENT, type MapPlayerRoster } from "../../../shared/map-players";
@@ -62,7 +62,6 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         else if (event !== MAP_WORLDS_EVENT) {
           const coordinate = event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate;
           Object.assign(data, { world: source.world, x: integer(request.query.x, coordinate), z: integer(request.query.z, coordinate) });
-          if (request.query.y !== undefined) data.y = integer(request.query.y, mapHeight);
         } else if (request.query.refresh === "1") {
           const key = source.daemonId + "/" + source.instanceUuid;
           const now = Date.now();
@@ -79,6 +78,8 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         if (event === MAP_PLAYERS_EVENT) {
           const roster = response as MapPlayerRoster;
           request.body = { edition: roster.edition, running: roster.running, rconEnabled: roster.rconEnabled, warnings: roster.warnings,
+            worldTimes: roster.worldTimes?.[source.world] === undefined ? {} : { [map.id]: roster.worldTimes[source.world] },
+            worldTimeSampledAt: roster.worldTimeSampledAt,
             players: roster.players.filter(player => player.position?.world === source.world).map(({ name, position }) => ({ name,
               position: { x: position!.x, y: position!.y, z: position!.z, yaw: position!.yaw, dimension: position!.dimension, world: map.id } })) };
         } else if (event === MAP_WORLDS_EVENT) {

@@ -42,7 +42,7 @@ export function blockProperties(value: unknown): Readonly<Record<string, string>
   if (entries.length) return Object.fromEntries(entries.map(([key, value]) => [key, String(value)]));
 }
 
-export function chunkLayers(nbt: any, sliceY?: number, retainBiomes = false): BlockLayer[] {
+export function chunkLayers(nbt: any, retainBiomes = false): BlockLayer[] {
   const chunk = nbt.Level ?? nbt;
   const sections = chunk.sections ?? chunk.Sections;
   if (!Array.isArray(sections)) throw new Error("MC_MAP_CORRUPT");
@@ -50,7 +50,6 @@ export function chunkLayers(nbt: any, sliceY?: number, retainBiomes = false): Bl
   return sections.map((section: any) => {
     const y = Number(section.Y);
     if (!Number.isInteger(y) || y < -128 || y > 127) throw new Error("MC_MAP_CORRUPT");
-    if (sliceY !== undefined && y !== Math.floor(sliceY / 16)) return undefined;
     let biome: BlockLayer["biome"];
     const biomes = section.biomes?.palette;
     if (Array.isArray(biomes) && biomes.length && biomes.length <= 64 && biomes.every(name => typeof name === "string")) {
@@ -80,11 +79,11 @@ export function chunkLayers(nbt: any, sliceY?: number, retainBiomes = false): Bl
 
 export interface BlockLayer { y: number; empty?: boolean; block(index: number): string; biome?(index: number): string; properties?(index: number): Readonly<Record<string, string>> | undefined; fluid?(index: number): string | undefined }
 
-export function chunkSurface(nbt: any, nether = false, sliceY?: number) {
-  return surfaceFromLayers(chunkLayers(nbt, sliceY), nether, sliceY);
+export function chunkSurface(nbt: any, nether = false) {
+  return surfaceFromLayers(chunkLayers(nbt), nether);
 }
 
-export function surfaceFromLayers(layers: BlockLayer[], nether = false, sliceY?: number) {
+export function surfaceFromLayers(layers: BlockLayer[], nether = false) {
   const colors = new Uint32Array(256);
   const heights = new Int16Array(256).fill(-32768);
   const record = (column: number, height: number, name: string, layer: BlockLayer, index: number) => {
@@ -94,18 +93,6 @@ export function surfaceFromLayers(layers: BlockLayer[], nether = false, sliceY?:
     colors[column] = blockColor(name);
     heights[column] = height;
   };
-  if (sliceY !== undefined) {
-    const layer = layers.find((item) => item.y === Math.floor(sliceY / 16));
-    if (layer) {
-      const offset = (sliceY - layer.y * 16) * 256;
-      for (let index = 0; index < 256; index++) {
-        const name = layer.block(offset + index);
-        if (isAir(name)) continue;
-        record(index, sliceY, name, layer, offset + index);
-      }
-    }
-    return { colors, heights };
-  }
   for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
     let open = !nether;
     let lastY = 121;

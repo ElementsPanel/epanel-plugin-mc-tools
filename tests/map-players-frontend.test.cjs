@@ -42,13 +42,14 @@ test("public maps never prompt, stale reads are discarded on close, and restart 
 });
 
 test("polling refreshes visible maps, filters names, and removes timers on unmount", async t => {
-  let poll, cleared = false, reads = 0;
-  t.mock.method(globalThis, "setInterval", fn => { poll = fn; return 123; });
-  t.mock.method(globalThis, "clearInterval", id => { assert.equal(id, 123); cleared = true; });
+  const timers = new Map(); let reads = 0;
+  t.mock.method(globalThis, "setInterval", (fn, delay) => { timers.set(delay, fn); return delay; });
+  t.mock.method(globalThis, "clearInterval", id => timers.delete(id));
   const f = mount(t, { players: async () => { reads++; return { ...roster(true), players: [{ name: "Steve" }, { name: "Alex" }] }; } });
-  await tick(); assert.equal(reads, 1); poll(); await tick(); assert.equal(reads, 2);
+  await tick(); assert.equal(reads, 1); timers.get(1000)(); assert.equal(reads, 1, "local clock updates do not call RCON");
+  const poll = timers.get(3000); poll(); await tick(); assert.equal(reads, 2);
   f.state.search = "STE"; assert.deepEqual(f.state.players.map(player => player.name), ["Steve"]);
-  f.close(); assert(cleared); poll(); assert.equal(reads, 2);
+  f.close(); assert.equal(timers.size, 0); poll(); assert.equal(reads, 2);
 });
 
 test("markers use the selected world and head height, project yaw with the camera, and hide missing/offscreen positions", () => {

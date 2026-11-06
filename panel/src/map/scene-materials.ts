@@ -20,7 +20,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
     uAtlas: { value: atlas }, uAnimation: { value: animation }, uAnimationWidth: { value: width },
     uAtlasSize: { value: new Vector2(layout.width, layout.height) }, uColumns: { value: layout.columns },
     uCell: { value: layout.cell }, uInner: { value: layout.inner }, uPadding: { value: layout.padding },
-    uOverlay: { value: overlay }, uTime: { value: 0 }, uCut: { value: 4096 }, uFloor: { value: -4096 },
+    uOverlay: { value: overlay }, uTime: { value: 0 },
     uVerticalShade: { value: new Vector2(nether ? 0.9 : 1, nether ? 0.9 : 0.5) },
     uFogColor: { value: new Color(sky).convertLinearToSRGB() }, uFogNear: { value: 96 }, uFogFar: { value: 220 }
   };
@@ -47,7 +47,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       varying float vTexture;
       varying float vFlags;
       varying float vShade;
-      varying float vHeight;
       varying float vFogDistance;
       void main() {
         vec2 corner = position.xy;
@@ -72,7 +71,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         float shade = aFace < 2.0 ? 0.6 : aFace < 2.5 ? uVerticalShade.x : aFace < 3.5 ? uVerticalShade.y : aFace < 6.0 ? 0.8 : 1.0;
         float occlusion = corner.y > 0.5 ? (corner.x > 0.5 ? ao.z : ao.w) : (corner.x > 0.5 ? ao.y : ao.x);
         vShade = mod(floor(aMaterial.y / 8.0), 2.0) > 0.5 ? 1.0 : shade * (1.0 - occlusion * 0.2);
-        vHeight = world.y;
         vFogDistance = max(length(relative.xz), abs(relative.y));
         gl_Position = projectionMatrix * modelViewMatrix * vec4(vertex, 1.0);
       }
@@ -88,8 +86,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       uniform float uPadding;
       uniform float uOverlay;
       uniform float uTime;
-      uniform float uCut;
-      uniform float uFloor;
       uniform vec3 uFogColor;
       uniform float uFogNear;
       uniform float uFogFar;
@@ -100,7 +96,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       varying float vTexture;
       varying float vFlags;
       varying float vShade;
-      varying float vHeight;
       varying float vFogDistance;
       vec2 mappedUv() {
         vec2 local = mod(floor(vFlags / 32.0), 2.0) > 0.5 ? vCorner : fract(vUv);
@@ -122,7 +117,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         return color;
       }
       void main() {
-        if (vHeight > uCut || vHeight < uFloor) discard;
         // Fire models provide their own front/back faces. Avoid drawing a
         // reversed copy over the opposite face in the double-sided plant pass.
         if (mod(floor(vFlags / 64.0), 2.0) > 0.5 && !gl_FrontFacing) discard;

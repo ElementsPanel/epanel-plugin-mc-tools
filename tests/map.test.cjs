@@ -135,7 +135,7 @@ test("Java maps discover dimensions, render saved chunks at positive/negative co
   await assert.rejects(service.worlds("unknown"), /MC_MAP_INSTANCE_MISSING/);
 });
 
-test("Java 3D scenes read real region blocks, preserve negative coordinates, cache separately from slices and refresh saved changes", async t => {
+test("Java 3D scenes read real region blocks, preserve negative coordinates, ignore old slice parameters and refresh saved changes", async t => {
   const root = await temporary(t), directory = path.join(root, "world");
   await writeRegion(directory, 0, 0, javaChunk("grass_block", -1));
   await writeRegion(directory, -1, -1, javaChunk("sand", 4), 1, true);
@@ -149,8 +149,7 @@ test("Java 3D scenes read real region blocks, preserve negative coordinates, cac
   assert.equal(decodeScene(a).heights[0], -1);
   const negative = decodeScene(await service.scene("server", world.id, -1, -1));
   assert.equal(negative.heights[1023], 79); assert.equal(negative.heights[0], -32768);
-  const slice = decodeScene(await service.scene("server", world.id, 0, 0, -8));
-  assert.equal(slice.heights[0], -8); assert.equal(await service.scene("server", world.id, 0, 0), a);
+  assert.equal(await service.scene("server", world.id, 0, 0, -8), a); assert.equal(await service.scene("server", world.id, 0, 0), a);
   assert.deepEqual(await hashes(path.join(directory, "region")), before);
   await writeRegion(directory, 0, 0, javaChunk("water", -1), 3);
   await service.worlds("server", true);
@@ -204,49 +203,6 @@ test("Java 26.x dimensions, legacy dimension fallbacks, and modern spawn data wo
   assert.deepEqual(worlds.find((value) => value.dimension === "minecraft:the_end").spawn, { x: 100, z: 0 });
 });
 
-test("Java slices select exact positive/negative layers, keep air empty, isolate cached requests, and refresh every layer", async (t) => {
-  const root = await temporary(t), directory = path.join(root, "world");
-  const below = Array(4096).fill(1), above = Array(4096).fill(1);
-  below.fill(8, 15 * 256);
-  above.fill(3, 0, 256);
-  above[256 + 9 * 16 + 3] = 0;
-  const chunk = nbt.comp({ DataVersion: nbt.int(3465), sections: nbt.list({ type: "compound", value: [
-    javaSection(-4, "deepslate"),
-    { Y: nbt.byte(-1), Blocks: nbt.byteArray(below) },
-    { Y: nbt.byte(0), Blocks: nbt.byteArray(above) },
-    javaSection(4, "grass_block")
-  ] }) });
-  await writeRegion(directory, 0, 0, chunk);
-  const service = new WorldMapService({ getInstance: () => instance(root) });
-  t.after(() => service.dispose());
-  const [world] = await service.worlds("server");
-  const tile = (y) => service.tile("server", world.id, 0, 0, y);
-  const [surface, zero, duplicate, negative] = await Promise.all([tile(), tile(0), tile(0), tile(-1)]);
-  assert.equal(zero, duplicate);
-  assert.notEqual(zero, surface);
-  assert.deepEqual(pixels(surface)(3, 9), rgb(blockColor("grass_block")));
-  assert.deepEqual(pixels(zero)(3, 9), rgb(blockColor("dirt")));
-  assert.deepEqual(pixels(negative)(3, 9), rgb(blockColor("water")));
-  assert.deepEqual(pixels(await tile(1))(3, 9), [0, 0, 0, 0]);
-  assert.deepEqual(pixels(await tile(1))(9, 3), rgb(blockColor("stone")));
-  assert.deepEqual(pixels(await tile(2))(3, 9), rgb(blockColor("stone")));
-  for (const y of [-64, -49]) assert.deepEqual(pixels(await tile(y))(0, 0), rgb(blockColor("deepslate")));
-  for (const y of [-2048, -48, 16, 80, 2047]) {
-    const empty = await tile(y);
-    assert.equal(empty.warnings, 0);
-    assert.deepEqual(pixels(empty)(0, 0), [0, 0, 0, 0]);
-  }
-  assert.equal(await tile(), surface);
-  assert.equal(await tile(0), zero);
-  assert.equal(await tile(-1), negative);
-  for (const y of [null, "0", true, [], NaN, Infinity, -2049, 2048, 1.5]) await assert.rejects(tile(y), /MC_MAP_INVALID/);
-  await writeRegion(directory, 0, 0, javaChunk("water", 0));
-  await service.worlds("server", true);
-  assert.deepEqual(pixels(await tile(0))(3, 9), rgb(blockColor("water")));
-  assert.deepEqual(pixels(await tile(-1))(3, 9), [0, 0, 0, 0]);
-  assert.notEqual(await tile(), surface);
-});
-
 test("Java numeric blocks, legacy Name palettes, and 26.x string/id/mixed palettes all survive NBT region round trips", async (t) => {
   const root = await temporary(t);
   const ones = Array.from({ length: 256 }, () => [0x11111111, 0x11111111]);
@@ -276,7 +232,7 @@ test("Java numeric blocks, legacy Name palettes, and 26.x string/id/mixed palett
     assert.equal(tile.warnings, 0, name);
     assert.deepEqual(pixels(tile)(0, 0), rgb(blockColor("grass_block")), name);
     assert.deepEqual(pixels(await service.tile("server", world.id, 0, 0, 64))(0, 0), rgb(blockColor("grass_block")), name);
-    assert.deepEqual(pixels(await service.tile("server", world.id, 0, 0, 80))(0, 0), [0, 0, 0, 0], name);
+    assert.deepEqual(pixels(await service.tile("server", world.id, 0, 0, 80))(0, 0), rgb(blockColor("grass_block")), name);
   }
   assert.throws(() => chunkSurface({ sections: [{ Y: 0, block_states: { palette: [{}] } }] }), /MC_MAP_CORRUPT/);
 });
@@ -302,7 +258,7 @@ test("Java continuous and padded palettes decode long boundaries and old numeric
   assert.equal(negative.heights[0], -49);
   for (const y of [-2048, -1, 0, 2047]) {
     const slice = chunkSurface(nbt.simplify(javaChunk("stone", Math.floor(y / 16))), false, y);
-    assert.equal(slice.heights[0], y);
+    assert.equal(slice.heights[0], Math.floor(y / 16) * 16 + 15);
     assert.equal(slice.colors[0], blockColor("stone"));
   }
 });
@@ -341,11 +297,7 @@ test("Nether surface skips the bedrock ceiling and selects the terrain below an 
   const result = chunkSurface({ Level: { Sections: [{ Y: 7, Blocks: blocks }] } }, true);
   assert.equal(result.heights[0], 116);
   assert.equal(result.colors[0], blockColor("netherrack"));
-  const ceiling = chunkSurface({ Level: { Sections: [{ Y: 7, Blocks: blocks }] } }, true, 127);
-  assert.equal(ceiling.heights[0], 127);
-  assert.equal(ceiling.colors[0], blockColor("netherrack"));
-  const air = chunkSurface({ Level: { Sections: [{ Y: 7, Blocks: blocks }] } }, true, 120);
-  assert.equal(air.heights[0], -32768);
+
 });
 
 test("world discovery and file reads reject traversal and symlinks outside the instance", async (t) => {
@@ -377,17 +329,17 @@ test("Bedrock subchunks support v1/v8/v9, zero-bit palettes, negative heights, a
     const layer = bedrockLayer(bedrockSubchunk(-4, "stone", version), -4);
     assert.equal(layer.y, -4);
     assert.equal(layer.block(0), "minecraft:stone");
-    assert.equal(surfaceFromLayers([layer], false, -64).heights[0], -64);
+    assert.equal(surfaceFromLayers([layer]).heights[0], -49);
   }
   const index = (3 << 8) | (9 << 4) | 12;
   const mixed = bedrockLayer(Buffer.concat([Buffer.from([9, 1, 0]), bedrockStorage(["air", "water"], (i) => Number(i === index))]), 0);
   assert.equal(mixed.block(12 * 256 + 9 * 16 + 3), "minecraft:water");
   assert.equal(mixed.block(12 * 256 + 3 * 16 + 9), "air");
-  assert.equal(surfaceFromLayers([mixed], false, 12).colors[9 * 16 + 3], blockColor("water"));
-  assert.equal(surfaceFromLayers([mixed], false, 11).heights[9 * 16 + 3], -32768);
+  assert.equal(surfaceFromLayers([mixed]).colors[9 * 16 + 3], blockColor("water"));
+  assert.equal(surfaceFromLayers([mixed]).heights[9 * 16 + 3], 12);
   const numeric = Buffer.alloc(6145);
   numeric[1 + index] = 8;
-  assert.equal(surfaceFromLayers([bedrockLayer(numeric, 0)], false, 12).colors[9 * 16 + 3], blockColor("water"));
+  assert.equal(surfaceFromLayers([bedrockLayer(numeric, 0)]).colors[9 * 16 + 3], blockColor("water"));
   assert.throws(() => bedrockLayer(Buffer.from([9, 1, 0, 3]), 0), /MC_MAP_CORRUPT/);
   assert.throws(() => bedrockLayer(bedrockSubchunk(1, "stone"), 0), /MC_MAP_CORRUPT/);
 });
@@ -443,54 +395,6 @@ test("Bedrock map snapshots read a live locked database, isolate dimensions, ref
   assert(await live.get(bedrockKey(0, 0, 0, 47, -4)));
 });
 
-test("Bedrock slices read only the selected subchunk, distinguish air and Y=0, and support negative heights and Nether ceilings", async (t) => {
-  const { LevelDB } = require("leveldb-zlib");
-  const root = await temporary(t), directory = path.join(root, "world", "db");
-  await fs.mkdir(directory, { recursive: true });
-  const live = new LevelDB(directory, { createIfMissing: true });
-  await live.open();
-  t.after(() => live.close());
-  await live.put(bedrockKey(0, 0, 0, 47, -4), bedrockSubchunk(-4, "deepslate"));
-  await live.put(bedrockKey(0, 0, 0, 47, -1), bedrockSubchunk(-1, "sand"));
-  await live.put(bedrockKey(0, 0, 0, 47, 0), Buffer.concat([Buffer.from([9, 1, 0]), bedrockStorage(["stone", "air", "water"], (index) => {
-    const x = index >> 8, z = (index >> 4) & 15, y = index & 15;
-    return y === 0 ? 2 : x === 3 && z === 9 && y === 1 ? 1 : 0;
-  }, 2)]));
-  await live.put(bedrockKey(0, 0, 0, 47, 10), Buffer.from([255]));
-  await live.put(bedrockKey(1, 0, 0, 47, -128), bedrockSubchunk(-128, "bedrock"));
-  await live.put(bedrockKey(1, 0, 0, 47, 127), bedrockSubchunk(127, "snow"));
-  await live.put(bedrockKey(0, 0, 1, 47, 2), bedrockSubchunk(2, "netherrack"));
-  await live.put(bedrockKey(0, 0, 1, 47, 7), bedrockSubchunk(7, "bedrock"));
-  await live.put(bedrockKey(0, 0, 2, 47, 0), bedrockSubchunk(0, "end_stone"));
-  const service = new WorldMapService({ getInstance: () => instance(root, "minecraft/bedrock") });
-  t.after(() => service.dispose());
-  const worlds = await service.worlds("server");
-  const overworld = worlds.find((world) => world.dimensionId === 0);
-  const tile = (y) => service.tile("server", overworld.id, 0, 0, y);
-  const zero = await tile(0);
-  assert.equal(zero.warnings, 0);
-  assert.deepEqual(pixels(zero)(3, 9), rgb(blockColor("water")));
-  assert.deepEqual(pixels(await tile(1))(3, 9), [0, 0, 0, 0]);
-  assert.deepEqual(pixels(await tile(1))(9, 3), rgb(blockColor("stone")));
-  assert.deepEqual(pixels(await tile(2))(3, 9), rgb(blockColor("stone")));
-  assert.deepEqual(pixels(await tile(-1))(3, 9), rgb(blockColor("sand")));
-  assert.deepEqual(pixels(await tile(-64))(3, 9), rgb(blockColor("deepslate")));
-  assert.deepEqual(pixels(await tile(16))(3, 9), [0, 0, 0, 0]);
-  assert.deepEqual(pixels(await tile(-2048))(16, 0), rgb(blockColor("bedrock")));
-  assert.deepEqual(pixels(await tile(2047))(16, 0), rgb(blockColor("snow")));
-  assert.equal((await tile(160)).warnings, 1);
-  assert.equal(await tile(0), zero);
-  const nether = worlds.find((world) => world.dimensionId === 1);
-  assert.deepEqual(pixels(await service.tile("server", nether.id, 0, 0))(0, 0), rgb(blockColor("netherrack")));
-  assert.deepEqual(pixels(await service.tile("server", nether.id, 0, 0, 127))(0, 0), rgb(blockColor("bedrock")));
-  const end = worlds.find((world) => world.dimensionId === 2);
-  assert.deepEqual(pixels(await service.tile("server", end.id, 0, 0, 0))(0, 0), rgb(blockColor("end_stone")));
-  await live.put(bedrockKey(0, 0, 0, 47, 0), bedrockSubchunk(0, "lava"));
-  assert.equal(await tile(0), zero);
-  await service.worlds("server", true);
-  assert.deepEqual(pixels(await tile(0))(3, 9), rgb(blockColor("lava")));
-});
-
 test("Bedrock snapshot invalidation waits for readers and cleans temporary directories on disposal", async (t) => {
   const { LevelDB } = require("leveldb-zlib");
   const root = await temporary(t), directory = path.join(root, "db");
@@ -544,13 +448,9 @@ test("map panel routes run instance authorization before forwarding and validate
   assert.deepEqual(calls[0], { event: "mc-tools/map/tile", data: { instanceUuid: "server", world: "a".repeat(24), x: -1, z: 2 } });
   assert.deepEqual(checks.slice(-3), ["permission", "validate", "instance"]);
   for (const query of [{ world: "../world", x: "0", z: "0" }, { world: "a".repeat(24), x: "999999", z: "0" }, { world: "a".repeat(24), x: ["0"], z: "0" }]) assert.match((await request("/tile", query)).body.message, /MC_MAP_INVALID/);
-  for (const y of ["", "1.5", "1e2", "2048", "-2049", ["0"], null, 0]) {
-    assert.match((await request("/tile", { world: "a".repeat(24), x: "0", z: "0", y })).body.message, /MC_MAP_INVALID/);
-  }
-  assert.equal(calls.length, 1);
-  for (const y of ["-2048", "-64", "0", "2047"]) {
+  for (const y of ["-2048", "0", "2047", "invalid"]) {
     assert.deepEqual((await request("/tile", { world: "a".repeat(24), x: "0", z: "0", y })).body, ["map"]);
-    assert.equal(calls.at(-1).data.y, Number(y));
+    assert.equal(calls.at(-1).data.y, undefined);
   }
   await request("/worlds", { refresh: "1" });
   assert.deepEqual(calls.at(-1).data, { instanceUuid: "server", refresh: true });
@@ -559,7 +459,7 @@ test("map panel routes run instance authorization before forwarding and validate
   assert.equal(calls.length, count);
   assert.equal((await request("/scene", { world: "a".repeat(24), x: "937501", z: "0" })).body.message, "MC_MAP_INVALID");
   await request("/scene", { world: "a".repeat(24), x: "-937500", z: "0", y: "0" });
-  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world: "a".repeat(24), x: -937500, z: 0, y: 0 } });
+  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world: "a".repeat(24), x: -937500, z: 0 } });
   assert.deepEqual(checks.slice(-3), ["permission", "validate", "instance"]);
 });
 
@@ -586,12 +486,12 @@ test("daemon map protocol returns public identifiers and hides filesystem errors
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0 });
   assert.equal(response.chunks, 1);
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0, y: 0 });
-  assert.deepEqual(pixels(response)(0, 0), [0, 0, 0, 0]);
+  assert.deepEqual(pixels(response)(0, 0), rgb(blockColor("grass_block")));
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0, y: 64 });
   assert.deepEqual(pixels(response)(0, 0), rgb(blockColor("grass_block")));
   for (const y of [null, "64", 1.5, -2049, 2048]) {
     await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0, y });
-    assert.equal(error.message, "MC_MAP_INVALID");
+    assert.deepEqual(pixels(response)(0, 0), rgb(blockColor("grass_block")));
   }
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world: "../secret", x: 0, z: 0 });
   assert.equal(error.message, "MC_MAP_INVALID");

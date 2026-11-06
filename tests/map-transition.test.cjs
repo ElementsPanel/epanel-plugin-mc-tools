@@ -91,7 +91,7 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
   };
   const uniforms = { uAtlas: { value: { dispose() {} } }, uAnimation: { value: { dispose() {} } },
     uFogColor: { value: new three.Color() },
-    uCut: { value: 4096 }, uFloor: { value: -4096 }, uTime: { value: 0 }, uFogNear: { value: 96 }, uFogFar: { value: 220 } };
+    uTime: { value: 0 }, uFogNear: { value: 96 }, uFogFar: { value: 220 } };
   const { SceneViewport, visibleTopDownTiles } = loader({ three: { ...three, WebGLRenderer: renderer },
     "three/addons/controls/OrbitControls.js": { OrbitControls: actualControls ? require("three/addons/controls/OrbitControls.js").OrbitControls : controls },
     "./scene-materials": { sceneMaterials(_sky, _nether, callback) { ready = callback; return Array.from({ length: 4 }, () => ({ uniforms, dispose() {} })); } }
@@ -106,7 +106,7 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
     const request = { world, x, z, signal, y }; requests.push(request);
     const result = { version: 1, heights: heights.toString("base64"), quads: quad.toString("base64"), chunks: 1, warnings: 0, limited: false };
     return options.load ? options.load(request, result) : result;
-  }, state => states.push(state), undefined, topDown ? "orthographic" : "perspective", canvas);
+  }, state => states.push(state), topDown ? "orthographic" : "perspective", canvas);
   view.camera.zoom = initial.zoom; view.center(initial.x, initial.z);
   const frame = time => {
     now = time;
@@ -394,11 +394,6 @@ test("the orthographic scene has exact 2D scale at every elevation and remains a
   }
   assert.equal(f.view.renderer.options.alpha, true);
   assert(!f.view.renderer.options.preserveDrawingBuffer, "direct canvas composition needs no retained readback buffer");
-  f.view.setLayer(-64); f.frame(16);
-  assert(f.uniforms.uFloor.value > -64 && f.uniforms.uFloor.value < -63);
-  assert(f.uniforms.uCut.value > -63 && f.uniforms.uCut.value < -62);
-  f.view.setLayer(); f.frame(32);
-  assert(f.uniforms.uFloor.value < MAP_MIN_Y); assert(f.uniforms.uCut.value > MAP_MAX_Y);
   for (let i = 0; i < 40 && f.frames.size; i++) { await tick(); f.frame(48 + i * 16); }
   await tick(); f.frame(800);
   assert.equal(f.frames.size, 0);

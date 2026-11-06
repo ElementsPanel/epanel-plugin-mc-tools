@@ -1,6 +1,6 @@
 import { BufferAttribute, Color, Group, InstancedBufferAttribute, InstancedBufferGeometry, Matrix4, Mesh, MOUSE, OrthographicCamera, PerspectiveCamera, Scene, Sphere, TOUCH, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y, MAP_SCENE_SIZE, mapHeight, type MapSceneTile, type MapWorld } from "../../../shared/map";
+import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y, MAP_SCENE_SIZE, type MapSceneTile, type MapWorld } from "../../../shared/map";
 import type { Camera, MapRenderer, MapViewState } from "./viewport";
 import { decodeScene } from "./scene-codec";
 import { sceneMaterials } from "./scene-materials";
@@ -11,7 +11,7 @@ import { KeyboardNavigation } from "./navigation";
 import { normalizeBearing, rotatedSize, screenToWorld, tileInView } from "./bearing";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
-const tileKey = (x: number, z: number, y?: number) => `${y ?? "surface"}:${x}:${z}`;
+const tileKey = (x: number, z: number) => `surface:${x}:${z}`;
 const clamp = (value: number) => Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, value));
 interface SceneTile { x: number; z: number; key: string; position: string; group: Group; heights: Int16Array; count: number; warnings: number; limited: boolean; animated: boolean }
 
@@ -91,13 +91,11 @@ export class SceneViewport implements MapRenderer {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly world: MapWorld,
-    private readonly load: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapSceneTile>,
+    private readonly load: (world: string, x: number, z: number, signal: AbortSignal) => Promise<MapSceneTile>,
     private readonly changed: (state: MapViewState) => void,
-    private sliceY?: number,
     private projection: "perspective" | "orthographic" = "perspective",
     private readonly inputCanvas = canvas
   ) {
-    mapHeight(sliceY);
     this.blend = this.topDown ? 0 : 1;
     try { this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" }); }
     catch { throw new Error("MC_MAP_WEBGL_UNAVAILABLE"); }
@@ -106,7 +104,7 @@ export class SceneViewport implements MapRenderer {
     this.sky = new Color(sky);
     this.materials = sceneMaterials(sky, nether, () => { this.atlasReady = true; this.schedule(); }, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
     this.origin = { x: Math.floor(world.spawn.x / SIZE) * SIZE, z: Math.floor(world.spawn.z / SIZE) * SIZE };
-    const target = new Vector3(world.spawn.x - this.origin.x, Math.min(sliceY ?? 64, 64) + 2, world.spawn.z - this.origin.z);
+    const target = new Vector3(world.spawn.x - this.origin.x, 66, world.spawn.z - this.origin.z);
     this.viewCamera.position.copy(target).add(new Vector3(46, 46, 46).setLength(80));
     this.controls = new OrbitControls(this.viewCamera, inputCanvas);
     this.controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
@@ -125,7 +123,6 @@ export class SceneViewport implements MapRenderer {
       set: (zoom: number) => this.setZoom(zoom)
     });
     this.controls.update();
-    this.updateClipping();
     inputCanvas.addEventListener("pointerdown", this.focus);
     this.navigation = new KeyboardNavigation(inputCanvas,
       () => !this.topDown && !this.transition && this.active && !this.lost && this.controls.enabled && !this.abort.signal.aborted, this.schedule);
@@ -167,7 +164,7 @@ export class SceneViewport implements MapRenderer {
     this.projection = projection;
     this.transition = { from: this.blend, to: this.topDown ? 0 : 1, startedAt: performance.now() };
     this.controls.enabled = false;
-    this.updateClipping(); this.schedule();
+    this.schedule();
   }
 
   setActive(active: boolean) {
@@ -224,13 +221,6 @@ export class SceneViewport implements MapRenderer {
     this.schedule();
   }
 
-  setLayer(y?: number) {
-    mapHeight(y);
-    if (this.sliceY === y || this.abort.signal.aborted) return;
-    this.sliceY = y; this.failed.clear(); this.skipped.clear(); this.error = undefined;
-    this.updateClipping(); this.schedule();
-  }
-
   dispose() {
     if (this.abort.signal.aborted) return;
     this.navigation.dispose();
@@ -254,11 +244,6 @@ export class SceneViewport implements MapRenderer {
     const offset = this.viewCamera.position.clone().sub(this.controls.target).setLength(160 / Math.max(1, Math.min(12, value)));
     this.viewCamera.position.copy(this.controls.target).add(offset);
     this.controls.update(); this.schedule();
-  }
-
-  private updateClipping() {
-    this.materials[0].uniforms.uCut.value = this.sliceY === undefined ? 4096 : this.sliceY + 1.001;
-    this.materials[0].uniforms.uFloor.value = this.topDown && !this.transition && this.sliceY !== undefined ? this.sliceY + .001 : -4096;
   }
 
   private focus = () => { if (!this.topDown) this.inputCanvas.focus({ preventScroll: true }); };
@@ -297,9 +282,9 @@ export class SceneViewport implements MapRenderer {
 
   private elevation(x: number, z: number) {
     const tx = Math.floor(x / SIZE), tz = Math.floor(z / SIZE);
-    const tile = this.cache.get(tileKey(tx, tz, this.sliceY)) ?? this.displayed.get(`${tx}:${tz}`);
+    const tile = this.cache.get(tileKey(tx, tz)) ?? this.displayed.get(`${tx}:${tz}`);
     const value = tile?.heights[(Math.floor(z) - tz * SIZE) * SIZE + Math.floor(x) - tx * SIZE];
-    return value === undefined || value === -32768 ? undefined : Math.min(value, this.sliceY ?? Infinity);
+    return value === undefined || value === -32768 ? undefined : value;
   }
 
   private draw(time = performance.now()) {
@@ -323,17 +308,17 @@ export class SceneViewport implements MapRenderer {
     }
     const anchor = tiles.map(tile => tile.position).sort().join("|");
     if (this.anchor !== anchor) { this.anchor = anchor; this.skipped.clear(); this.failed.clear(); }
-    this.visible = new Set(tiles.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
+    this.visible = new Set(tiles.map(tile => tileKey(tile.x, tile.z)));
     // Fetch the visible footprint first, then keep two rings of ready geometry
     // outside every edge. Moving the camera can reveal them without a request.
     const buffered = this.topDown && !this.transition ? visibleTopDownTiles(this.camera, this.width, this.height, PREFETCH_MARGIN, this.topBearing) : [];
-    const coverage = [...tiles, ...buffered.filter(tile => !this.visible.has(tileKey(tile.x, tile.z, this.sliceY)))];
-    this.wanted = new Set(coverage.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
+    const coverage = [...tiles, ...buffered.filter(tile => !this.visible.has(tileKey(tile.x, tile.z)))];
+    this.wanted = new Set(coverage.map(tile => tileKey(tile.x, tile.z)));
     const positions = new Set(tiles.map(tile => tile.position));
     for (const [position, tile] of this.displayed) if (!positions.has(position)) { tile.group.visible = false; this.displayed.delete(position); }
     let warnings = 0, limited = [...this.skipped].some(key => this.visible.has(key)), count = 0, animated = false;
     for (const item of tiles) {
-      const tile = this.cache.get(tileKey(item.x, item.z, this.sliceY)) ?? this.displayed.get(item.position);
+      const tile = this.cache.get(tileKey(item.x, item.z)) ?? this.displayed.get(item.position);
       if (!tile) continue;
       const previous = this.displayed.get(item.position);
       if (previous && previous !== tile) previous.group.visible = false;
@@ -375,10 +360,10 @@ export class SceneViewport implements MapRenderer {
     }
     this.renderer.render(this.scene, activeCamera);
     const needed = coverage.filter(tile => {
-      const key = tileKey(tile.x, tile.z, this.sliceY);
+      const key = tileKey(tile.x, tile.z);
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key) && !this.skipped.has(key);
     });
-    const loading = needed.filter(tile => this.visible.has(tileKey(tile.x, tile.z, this.sliceY))).length
+    const loading = needed.filter(tile => this.visible.has(tileKey(tile.x, tile.z))).length
       + [...this.pending].filter(key => this.visible.has(key)).length;
     this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, bearing: this.bearing, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 2 - this.pending.size))) void this.fetch(item);
@@ -408,8 +393,7 @@ export class SceneViewport implements MapRenderer {
     if (progress >= 1) {
       this.transition = undefined;
       this.controls.enabled = !this.topDown;
-      this.updateClipping();
-      if (!this.topDown) {
+        if (!this.topDown) {
         this.viewCamera.up.set(0, 1, 0); this.viewCamera.fov = MAP_FOV; this.viewCamera.far = 600; this.viewCamera.updateProjectionMatrix();
         this.controls.update();
       }
@@ -421,7 +405,7 @@ export class SceneViewport implements MapRenderer {
 
   private room(count: number, incoming: { x: number; z: number }) {
     const maxTiles = 256;
-    const incomingKey = tileKey(incoming.x, incoming.z, this.sliceY), incomingVisible = this.visible.has(incomingKey);
+    const incomingKey = tileKey(incoming.x, incoming.z), incomingVisible = this.visible.has(incomingKey);
     while (this.cache.size >= maxTiles || this.faces + count > MAX_FACES) {
       // Late responses can still be reused after a reversal, but must not evict
       // geometry needed by the current view or its prefetch margin.
@@ -446,11 +430,11 @@ export class SceneViewport implements MapRenderer {
   }
 
   private async fetch(item: { x: number; z: number; position: string }) {
-    const y = this.sliceY, key = tileKey(item.x, item.z, y), signal = this.abort.signal;
+    const key = tileKey(item.x, item.z), signal = this.abort.signal;
     this.pending.add(key);
     try {
-      const result = await this.load(this.world.id, item.x, item.z, signal, y);
-      if (signal.aborted || y !== this.sliceY) return;
+      const result = await this.load(this.world.id, item.x, item.z, signal);
+      if (signal.aborted) return;
       const decoded = decodeScene(result);
       if (!this.room(decoded.count, item)) { this.skipped.add(key); return; }
       const group = new Group(); group.visible = false;
@@ -484,7 +468,7 @@ export class SceneViewport implements MapRenderer {
       const tile = { ...item, key, group, heights: decoded.heights, count: decoded.count, warnings: decoded.warnings, limited: decoded.limited, animated: decoded.animated };
       this.cache.set(key, tile); this.scene.add(group); this.faces += tile.count;
     } catch (error) {
-      if (!signal.aborted && y === this.sliceY) {
+      if (!signal.aborted) {
         this.failed.add(key);
         if (this.visible.has(key)) this.error = error;
       }

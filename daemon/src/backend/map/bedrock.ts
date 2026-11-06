@@ -70,12 +70,9 @@ export function bedrockLayer(data: Buffer, y: number): BlockLayer {
   } };
 }
 
-export async function bedrockLayers(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {
+export async function bedrockLayers(db: LevelDB, x: number, z: number, dimension: number) {
   const prefix = bedrockKey(x, z, dimension, 47);
-  const key = sliceY === undefined ? undefined : bedrockKey(x, z, dimension, 47, Math.floor(sliceY / 16));
-  const iterator = db.getIterator(key
-    ? { gte: key, lte: key, limit: 1, fillCache: false }
-    : { gte: prefix, lt: bedrockKey(x, z, dimension, 48), limit: 257, fillCache: false });
+  const iterator = db.getIterator({ gte: prefix, lt: bedrockKey(x, z, dimension, 48), limit: 257, fillCache: false });
   const layers: BlockLayer[] = [];
   let warnings = 0, found = false;
   try {
@@ -94,7 +91,7 @@ export async function bedrockLayers(db: LevelDB, x: number, z: number, dimension
   return { layers, warnings };
 }
 
-export async function bedrockSurface(db: LevelDB, x: number, z: number, dimension: number, sliceY?: number) {
-  const chunk = await bedrockLayers(db, x, z, dimension, sliceY);
-  return chunk && { ...surfaceFromLayers(chunk.layers, dimension === 1, sliceY), warnings: chunk.warnings };
+export async function bedrockSurface(db: LevelDB, x: number, z: number, dimension: number) {
+  const chunk = await bedrockLayers(db, x, z, dimension);
+  return chunk && { ...surfaceFromLayers(chunk.layers, dimension === 1), warnings: chunk.warnings };
 }

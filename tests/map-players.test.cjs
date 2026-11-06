@@ -6,7 +6,7 @@ const path = require("node:path");
 const { EventEmitter } = require("node:events");
 const { loader, deferred } = require("./helpers.cjs");
 const load = loader();
-const { readRconPlayers } = load("daemon/src/backend/map/players.ts");
+const { readRconPlayers, readRconWorldTimes } = load("daemon/src/backend/map/players.ts");
 const { javaRconConfiguration } = load("daemon/src/backend/map/rcon-config.ts");
 
 test("RCON parses concatenated vanilla 26.2 entity replies, negative coordinates, dimensions and normalized facing", async () => {
@@ -37,6 +37,42 @@ test("partial positions remain listed, malformed coordinates are ignored and emp
   assert.equal(result.players[1].position, undefined);
   assert.deepEqual(result.warnings, ["MC_MAP_PLAYERS_POSITION_UNAVAILABLE"]);
   await assert.rejects(readRconPlayers(async () => "Unknown command"), /MC_MAP_RCON_RESPONSE/);
+});
+
+test("world time queries use 26.2 clocks, normalize long tick counts, and select the active save for each dimension", async () => {
+  const worlds = [
+    { id: "main", root: "/server", directory: "/server/world", dimension: "minecraft:overworld" },
+    { id: "nether", root: "/server", directory: "/server/world/DIM-1", dimension: "minecraft:the_nether" },
+    { id: "end", root: "/server", directory: "/server/world/DIM1", dimension: "minecraft:the_end" },
+    { id: "old", root: "/server", directory: "/server/old", dimension: "minecraft:overworld" },
+    { id: "custom", root: "/server", directory: "/server/world/dimensions/custom/moon", dimension: "custom:moon" },
+    { id: "invalid", root: "/server", directory: "/server/world/bad", dimension: "custom:moon run stop" }
+  ];
+  const calls = [];
+  const times = await readRconWorldTimes(async command => {
+    calls.push(command);
+    if (command === "execute in minecraft:overworld run time query time") return "§aClock minecraft:overworld is at 246000 tick(s)§r";
+    if (command === "execute in minecraft:the_end run time query time") return "Clock minecraft:the_end is at 9223372036854775807 tick(s)";
+    if (command === "execute in custom:moon run time query time") return "Clock custom:moon is at -1 tick(s)";
+    return "Dimension minecraft:the_nether has no default clock configured";
+  }, worlds, "world");
+  assert.deepEqual(times, { main: 6000, end: Number(9223372036854775807n % 24000n), custom: 23999 });
+  assert.equal(calls.length, 5); assert(calls.every(command => !command.includes("stop")));
+  assert.equal(calls.filter(command => command.includes("minecraft:overworld")).length, 1);
+});
+
+test("legacy daytime fallback accepts midnight but ignores unavailable or malformed time replies", async () => {
+  const worlds = [{ id: "main", root: "/server", directory: "/server/world", dimension: "minecraft:overworld" }];
+  for (const ticks of [0, 6000, 18000, 23999]) {
+    const calls = [];
+    const times = await readRconWorldTimes(async command => {
+      calls.push(command); return command.endsWith(" daytime") ? `The time is ${ticks}` : "Incorrect argument for command at position 42";
+    }, worlds, "world");
+    assert.deepEqual(times, { main: ticks }); assert.equal(calls.length, 2);
+  }
+  for (const response of ["Unknown command at position 42", "The time is NaN", "The time is 2.5", "The time is 42 trailing text", "The game time is 6000 tick(s)"]) {
+    assert.deepEqual(await readRconWorldTimes(async () => response, worlds, "world"), {});
+  }
 });
 
 function packet(id, type, body = "") {
@@ -129,10 +165,18 @@ async function fixture(t, text = "# Keep\r\nenable-rcon=false\r\nrcon.port=25576
   const { MapPlayerService } = loader({ "./rcon": { RconConnection: class {
     constructor(target, signal) { this.target = target; this.signal = signal; this.closed = false; connections.push(this); signal.addEventListener("abort", () => this.close()); }
     close() { this.closed = true; }
-    async run() { reads.push({ target: this.target, signal: this.signal }); return { players: [
-    { name: "Steve", position: { x: 1, y: 64, z: 2, dimension: "minecraft:overworld" } },
-    { name: "Alex", position: { x: 1, y: 64, z: 2, dimension: "minecraft:the_nether" } }
-  ], warnings: [] }; }
+    async run(read) {
+      const commands = []; reads.push({ target: this.target, signal: this.signal, commands });
+      return read(async command => {
+        commands.push(command);
+        if (command === "list") return "There are 2 of a max of 20 players online: Steve, Alex";
+        if (command.endsWith(" Pos")) return "Steve has the following entity data: [1d, 64d, 2d]Alex has the following entity data: [1d, 64d, 2d]";
+        if (command.endsWith(" Dimension")) return 'Steve has the following entity data: "minecraft:overworld"Alex has the following entity data: "minecraft:the_nether"';
+        if (command.endsWith(" Rotation")) return "Steve has the following entity data: [0f, 0f]Alex has the following entity data: [0f, 0f]";
+        if (command.includes(" time query ")) return "The time is 6000";
+        throw new Error(command);
+      });
+    }
   } }, ...overrides })("daemon/src/backend/map/players.ts");
   const service = new MapPlayerService({ getInstance: () => instance }, async () => worlds);
   t.after(() => service.dispose());
@@ -154,9 +198,32 @@ test("RCON setup does not modify until confirmed, preserves settings, generates 
   assert.deepEqual(await fs.readdir(f.root), ["server.properties"]);
   const roster = await f.service.list("server");
   assert(!JSON.stringify(roster).includes(config.password)); assert.equal(roster.players[0].position.world, "main");
+  assert.deepEqual(roster.worldTimes, { main: 6000, nether: 6000 });
+  assert.deepEqual((await f.service.list("server", "nether")).worldTimes, { nether: 6000 });
+  assert.deepEqual((await f.service.list("server", "imported")).worldTimes, {});
   assert.deepEqual((await f.service.list("server", "nether")).players.map(player => player.name), ["Alex"]);
   assert.equal(f.reads.length, 1); assert.equal(f.instance.listenerCount("exit"), 1);
   assert.equal(f.reads[0].signal.aborted, false);
+});
+
+test("world time refreshes over the persistent session with no online players and clears when the server stops", async t => {
+  let ticks = 0; const connections = [], commands = [];
+  const f = await fixture(t, "enable-rcon=true\nrcon.password=test\n", { "./rcon": { RconConnection: class {
+    constructor() { connections.push(this); }
+    close() { this.closed = true; }
+    async run(read) { return read(async command => {
+      commands.push(command);
+      return command === "list" ? "There are 0 of a max of 20 players online:" : `Clock minecraft:overworld is at ${ticks} tick(s)`;
+    }); }
+  } } });
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  const first = await f.service.list("server"); assert.deepEqual(first.players, []); assert.equal(first.worldTimes.main, 0);
+  ticks = 6000; now += 3000;
+  assert.equal((await f.service.list("server")).worldTimes.main, 6000);
+  assert.equal(connections.length, 1); assert.equal(commands.filter(command => command.includes("data get")).length, 0);
+  now += 3000; assert.equal((await f.service.list("server")).worldTimes.main, 6000, "paused clocks stay at the reported time");
+  f.instance.running = 0; f.instance.emit("exit");
+  assert.equal((await f.service.list("server")).worldTimes, undefined); assert.equal(connections[0].closed, true);
 });
 
 test("setup retains escaped passwords and never restarts after invalid config or failed writes", async t => {

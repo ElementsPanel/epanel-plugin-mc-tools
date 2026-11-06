@@ -1,4 +1,4 @@
-import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
+import { MAP_LIMIT, MAP_TILE_SIZE, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import { loadSceneViewport } from "./scene-loader";
 import { KeyboardNavigation } from "./navigation";
 import { normalizeBearing, rotatedSize, screenToWorld, tileInView, worldToScreen } from "./bearing";
@@ -9,20 +9,18 @@ export interface MapRenderer {
   readonly camera: Camera;
   center(x: number, z: number): void;
   zoom(factor: number): void;
-  setLayer(y?: number): void;
   dispose(): void;
 }
 export const MAP_DETAIL_ZOOM = 4;
-interface Tile { image: HTMLImageElement; warnings: number; position: string; y?: number; appearedAt?: number }
-interface DisplayTile { tile: Tile; previous?: Tile; startedAt: number; duration: number }
+interface Tile { image: HTMLImageElement; warnings: number; appearedAt?: number }
+interface DisplayTile { tile: Tile; startedAt: number; duration: number }
 interface ZoomAnimation { from: number; to: number; x: number; y: number; startedAt: number }
 
 const TILE_FADE_DURATION = 240;
 const DETAIL_FADE_DURATION = 240;
-const LAYER_FADE_DURATION = 100;
 const ZOOM_DURATION = 200;
 const easeOut = (progress: number) => 1 - Math.pow(1 - progress, 3);
-const tileKey = (position: string, y?: number) => `${y ?? "surface"}:${position}`;
+const tileKey = (position: string) => `surface:${position}`;
 
 export function worldPosition(camera: Camera, width: number, height: number, x: number, y: number, bearing = 0) {
   const offset = screenToWorld((x - width / 2) / camera.zoom, (y - height / 2) / camera.zoom, bearing);
@@ -67,12 +65,11 @@ export class MapViewport {
   private readonly displayed = new Map<string, DisplayTile>();
   private visible = new Set<string>();
   private readonly abort = new AbortController();
-  private blendCanvas?: HTMLCanvasElement | OffscreenCanvas;
   private terrainCanvas?: HTMLCanvasElement | OffscreenCanvas;
   private detail?: import("./scene-viewport").SceneViewport;
   private detailCanvas?: HTMLCanvasElement;
   private backdropCanvas?: HTMLCanvasElement;
-  private detailFrame?: { camera: Camera; width: number; height: number; bearing?: number; orthographic: boolean; y?: number };
+  private detailFrame?: { camera: Camera; width: number; height: number; bearing?: number; orthographic: boolean };
   private detailOpacity = 0;
   private detailFade?: { from: number; to: number; startedAt: number };
   private mode: "2d" | "3d" = "2d";
@@ -110,12 +107,10 @@ export class MapViewport {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     world: MapWorld,
-    private readonly load: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapTile>,
+    private readonly load: (world: string, x: number, z: number, signal: AbortSignal) => Promise<MapTile>,
     private readonly changed: (state: MapViewState) => void,
-    private sliceY?: number,
-    private readonly loadScene?: (world: string, x: number, z: number, signal: AbortSignal, y?: number) => Promise<MapSceneTile>
+    private readonly loadScene?: (world: string, x: number, z: number, signal: AbortSignal) => Promise<MapSceneTile>
   ) {
-    mapHeight(sliceY);
     this.world = world;
     this.camera.x = world.spawn.x;
     this.camera.z = world.spawn.z;
@@ -170,16 +165,6 @@ export class MapViewport {
     this.schedule();
   }
 
-  setLayer(y?: number) {
-    mapHeight(y);
-    if (this.abort.signal.aborted || this.sliceY === y) return;
-    this.sliceY = y;
-    this.detail?.setLayer(y);
-    this.failed.clear();
-    this.error = undefined;
-    this.schedule();
-  }
-
   dispose() {
     this.abort.abort();
     this.navigation.dispose();
@@ -193,7 +178,6 @@ export class MapViewport {
     }
     this.cache.clear();
     this.displayed.clear();
-    this.blendCanvas = undefined;
     if (this.terrainCanvas) this.terrainCanvas.width = this.terrainCanvas.height = 0;
     this.terrainCanvas = undefined;
     this.stopDetail();
@@ -321,40 +305,6 @@ export class MapViewport {
     return { x: (event.clientX - bounds.left) * this.width / bounds.width, y: (event.clientY - bounds.top) * this.height / bounds.height };
   }
 
-  private nearestTile(position: string, previous?: Tile) {
-    const exact = this.cache.get(tileKey(position, this.sliceY));
-    if (exact || this.sliceY === undefined) return exact;
-    let closest = previous?.y === undefined ? undefined : previous;
-    let distance = closest ? Math.abs(closest.y! - this.sliceY) : Infinity;
-    for (const tile of this.cache.values()) {
-      if (tile.position !== position || tile.y === undefined) continue;
-      const delta = Math.abs(tile.y - this.sliceY);
-      if (delta < distance) { closest = tile; distance = delta; }
-    }
-    return closest;
-  }
-
-  private blend(previous: Tile, tile: Tile, progress: number): CanvasImageSource {
-    const before = previous.image, current = tile.image, size = MAP_TILE_SIZE;
-    if (!this.blendCanvas) {
-      this.blendCanvas = typeof OffscreenCanvas === "function"
-        ? new OffscreenCanvas(MAP_TILE_SIZE, MAP_TILE_SIZE) : this.canvas.ownerDocument.createElement("canvas");
-    }
-    if (this.blendCanvas.width !== size) this.blendCanvas.width = this.blendCanvas.height = size;
-    const context = this.blendCanvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
-    if (!context) return tile.image;
-    context.clearRect(0, 0, size, size);
-    context.imageSmoothingEnabled = false;
-    context.globalCompositeOperation = "source-over";
-    context.globalAlpha = 1 - progress;
-    context.drawImage(before, 0, 0, size, size);
-    // Blend premultiplied pixels so air fades out and opaque terrain does not darken.
-    context.globalCompositeOperation = "lighter";
-    context.globalAlpha = progress;
-    context.drawImage(current, 0, 0, size, size);
-    return this.blendCanvas;
-  }
-
   private draw(time = performance.now()) {
     let animating = this.advanceZoom(time);
     const movement = this.navigation.advance(time);
@@ -386,7 +336,7 @@ export class MapViewport {
     context.fillStyle = "#213035";
     for (let z = 0; z < this.height; z += 32) for (let x = 0; x < this.width; x += 32) if ((x / 32 + z / 32) % 2) context.fillRect(x, z, 32, 32);
     const visible = visibleTiles(this.camera, this.width, this.height, this.bearing);
-    this.visible = new Set(visible.map((item) => tileKey(item.key, this.sliceY)));
+    this.visible = new Set(visible.map((item) => tileKey(item.key)));
     const positions = new Set(visible.map((item) => item.key));
     for (const key of this.displayed.keys()) if (!positions.has(key)) this.displayed.delete(key);
     let warnings = 0;
@@ -410,14 +360,14 @@ export class MapViewport {
     }
     for (const item of visible) {
       let display = this.displayed.get(item.key);
-      const tile = this.nearestTile(item.key, display?.tile);
+      const tile = this.cache.get(tileKey(item.key));
       if (tile && tile !== display?.tile) {
         tile.appearedAt ??= time;
-        display = { tile, previous: display?.tile, startedAt: display ? time : tile.appearedAt, duration: display ? LAYER_FADE_DURATION : TILE_FADE_DURATION };
+        display = { tile, startedAt: tile.appearedAt, duration: TILE_FADE_DURATION };
         this.displayed.set(item.key, display);
       }
       if (!display) continue;
-      warnings += this.cache.get(tileKey(item.key, this.sliceY))?.warnings || 0;
+      warnings += this.cache.get(tileKey(item.key))?.warnings || 0;
       const bounds = tileBounds(this.camera, paintWidth, paintHeight, item.x, item.z, ratio, ratioY);
       if (this.reducedMotion?.matches) {
         display.startedAt = time - display.duration;
@@ -425,14 +375,8 @@ export class MapViewport {
       }
       const progress = Math.max(0, Math.min(1, (time - display.startedAt) / display.duration));
       if (progress < 1) animating = true;
-      if (display.previous && progress < 1) {
-        terrain.globalAlpha = 1;
-        terrain.drawImage(this.blend(display.previous, display.tile, easeOut(progress)), bounds.x, bounds.y, bounds.width, bounds.height);
-      } else {
-        display.previous = undefined;
-        terrain.globalAlpha = easeOut(progress);
-        terrain.drawImage(display.tile.image, bounds.x, bounds.y, bounds.width, bounds.height);
-      }
+      terrain.globalAlpha = easeOut(progress);
+      terrain.drawImage(display.tile.image, bounds.x, bounds.y, bounds.width, bounds.height);
     }
     context.globalAlpha = 1;
     if (terrain !== context) {
@@ -445,7 +389,7 @@ export class MapViewport {
     context.setTransform(ratio, 0, 0, ratioY, 0, 0);
     this.drawMarkers(foreground);
     const needed = visible.filter((item) => {
-      const key = tileKey(item.key, this.sliceY);
+      const key = tileKey(item.key);
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
     });
     this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, bearing: this.bearing,
@@ -469,7 +413,7 @@ export class MapViewport {
 
   private get wantsScene() { return this.mode === "3d" || this.camera.zoom >= MAP_DETAIL_ZOOM || !!this.detail?.isTransitioning; }
   private get sceneReady() {
-    return this.detail?.ready && !!this.detailCanvas?.width && this.detailFrame?.y === this.sliceY;
+    return this.detail?.ready && !!this.detailCanvas?.width;
   }
   private get sceneVisible() { return this.sceneReady && this.detailOpacity > 0; }
 
@@ -562,11 +506,11 @@ export class MapViewport {
           this.detailState = state;
           if (this.mode === "3d" && this.detail) Object.assign(this.camera, this.detail.camera);
           if (this.mode === "3d" || this.detail?.isTransitioning) this.bearing = state.bearing ?? this.bearing;
-          if (this.detail?.ready) this.detailFrame = { ...this.detail.frameView, y: this.sliceY };
+          if (this.detail?.ready) this.detailFrame = this.detail.frameView;
           this.presentScene();
         }
         this.schedule();
-      }, this.sliceY, this.mode === "3d" ? "perspective" : "orthographic", this.canvas);
+      }, this.mode === "3d" ? "perspective" : "orthographic", this.canvas);
       this.detail.setSize(this.width, this.height);
       this.detail.camera.zoom = this.camera.zoom;
       this.detail.center(this.camera.x, this.camera.z);
@@ -593,18 +537,18 @@ export class MapViewport {
 
   private async fetchTile(item: { x: number; z: number; key: string }) {
     const signal = this.abort.signal;
-    const y = this.sliceY, key = tileKey(item.key, y);
+    const key = tileKey(item.key);
     this.active++;
     this.pending.add(key);
     try {
-      const result = await this.load(this.world.id, item.x, item.z, signal, y);
+      const result = await this.load(this.world.id, item.x, item.z, signal);
       if (signal.aborted) return;
       const image = new Image();
       const loaded = new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error("MC_MAP_READ_FAILED")); });
       image.src = "data:image/png;base64," + result.image;
       await loaded;
       if (signal.aborted) return;
-      this.cache.set(key, { image, warnings: result.warnings, position: item.key, y });
+      this.cache.set(key, { image, warnings: result.warnings });
       while (this.cache.size > 256) {
         const outside = [...this.cache.keys()].find((key) => !this.visible.has(key));
         if (!outside) break;
@@ -612,7 +556,7 @@ export class MapViewport {
       }
     } catch (error) {
       if (!signal.aborted) {
-        if (this.sliceY === y) this.error = error;
+        this.error = error;
         this.failed.add(key);
       }
     } finally {

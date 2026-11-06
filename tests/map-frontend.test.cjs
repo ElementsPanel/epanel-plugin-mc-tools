@@ -350,74 +350,6 @@ test("dragging or recentering cancels zoom, reduced motion skips transitions and
   assert.equal(f.listeners.size, 0);
 });
 
-test("scrubbing layers keeps requests bounded, blends without blank frames, displays intermediate layers and reuses cached slices", async t => {
-  const f = animatedViewport(t);
-  f.view.center(-24.25, 88.75);
-  f.view.camera.zoom = 2.5;
-  f.frame(0);
-  f.requests[0].resolve({ image: "surface", warnings: 2 });
-  await new Promise(resolve => setImmediate(resolve));
-  f.frame(16);
-  f.frame(256);
-  assert.equal(f.images.at(-1).image.url, "data:image/png;base64,surface");
-  const camera = { ...f.view.camera }, previous = [...f.requests];
-  for (const y of [64, 63, 62, 63]) { f.view.setLayer(y); f.frame(272); }
-  assert.deepEqual(f.view.camera, camera);
-  assert.equal(f.requests.length, previous.length);
-  assert.equal(f.images.at(-1).image.url, "data:image/png;base64,surface");
-  assert.equal(f.images.at(-1).alpha, 1);
-  previous[1].resolve({ image: "surface-neighbor", warnings: 9 });
-  previous[2].reject(new Error("stale-error"));
-  for (const request of previous.slice(3)) request.resolve({ image: "surface-neighbor", warnings: 9 });
-  await new Promise(resolve => setImmediate(resolve));
-  f.frame(288);
-  const current = f.requests.slice(previous.length);
-  assert.equal(current.length, 3);
-  assert(current.every(request => request.y === 63 && !request.signal.aborted));
-  assert.equal(f.states.at(-1).error, undefined);
-  assert.equal(f.states.at(-1).warnings, 0);
-  current[0].resolve({ image: "layer-63", warnings: 0 });
-  await new Promise(resolve => setImmediate(resolve));
-  f.frame(304);
-  assert.equal(f.blends.at(-2).image.url, "data:image/png;base64,surface");
-  assert.equal(f.blends.at(-2).alpha, 1);
-  assert.equal(f.blends.at(-1).alpha, 0);
-  f.frame(354);
-  assert(f.blends.at(-1).alpha > 0 && f.blends.at(-1).alpha < 1);
-  assert.equal(f.blends.at(-1).alpha + f.blends.at(-2).alpha, 1);
-  assert.equal(f.blends.at(-1).operation, "lighter");
-  f.frame(404);
-  assert.equal(f.images.at(-1).image.url, "data:image/png;base64,layer-63");
-  // Existing loads finish before the next target is requested, even during a fast drag.
-  f.view.setLayer(62); f.frame(420);
-  const pending63 = f.requests.filter(request => request.y === 63).slice(1);
-  pending63[0].resolve({ image: "layer-63-neighbor", warnings: 0 });
-  await new Promise(resolve => setImmediate(resolve));
-  f.frame(436);
-  const next = f.requests.at(-1);
-  assert.equal(next.y, 62);
-  f.view.setLayer(61); f.frame(452);
-  next.resolve({ image: "layer-62", warnings: 0 });
-  await new Promise(resolve => setImmediate(resolve));
-  f.frame(468); f.frame(568);
-  assert(f.images.some(draw => draw.image.url === "data:image/png;base64,layer-62"));
-  assert.equal(f.requests.at(-1).y, 61);
-  const requestsForFirstTile = () => f.requests.filter(request => request.y === 63 && request.x === current[0].x && request.z === current[0].z).length;
-  const cachedCount = requestsForFirstTile();
-  const beforeCached = f.images.length;
-  f.view.setLayer(63); f.frame(584); f.frame(684);
-  assert.equal(requestsForFirstTile(), cachedCount);
-  assert(f.images.slice(beforeCached).some(draw => draw.image.url === "data:image/png;base64,layer-63"));
-  const beforeSurface = f.images.length;
-  f.view.setLayer();
-  f.frame(700); f.frame(800);
-  assert(f.images.slice(beforeSurface).some(draw => draw.image.url === "data:image/png;base64,surface"));
-  assert.throws(() => f.view.setLayer(2048), /MC_MAP_INVALID/);
-  assert.deepEqual(f.view.camera, camera);
-  f.view.dispose();
-  assert(f.requests.every(request => request.signal.aborted));
-});
-
 test("map API shares authentication, encodes instance parameters, forwards cancellation, and reports protocol errors", async (t) => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
@@ -440,13 +372,13 @@ test("map API shares authentication, encodes instance parameters, forwards cance
   assert.equal(new URL(requests[1].url, "http://localhost").searchParams.has("y"), false);
   for (const y of [0, -64, 319]) {
     await api.tile("a".repeat(24), -1, 2, signal, y);
-    assert.equal(new URL(requests.at(-1).url, "http://localhost").searchParams.get("y"), String(y));
+    assert.equal(new URL(requests.at(-1).url, "http://localhost").searchParams.has("y"), false);
     assert.equal(requests.at(-1).options.signal, signal);
   }
   await api.scene("a".repeat(24), -1, 2, signal, 0);
   const scene = new URL(requests.at(-1).url, "http://localhost");
   assert.equal(scene.pathname, "/api/mc-tools/map/scene");
-  assert.equal(scene.searchParams.get("y"), "0");
+  assert.equal(scene.searchParams.has("y"), false);
   assert.equal(requests.at(-1).options.headers.Authorization, "Bearer token");
   assert.equal(authentications, 1);
   await api.players(signal);
@@ -481,15 +413,16 @@ function mapComponent(overrides) {
   return { ...mod.exports.default, render: () => null };
 }
 
-test("map view validates coordinates and layers, retains the selected layer on refresh/world changes, and disposes on unmount", async () => {
+test("map view validates coordinates, ignores old slice options, refreshes clocks and disposes on unmount", async t => {
   const worlds = [
     { id: "world", name: "Test", dimension: "minecraft:overworld", spawn: { x: 8, z: 16 } },
     { id: "nether", name: "Test", dimension: "minecraft:the_nether", spawn: { x: 1, z: 2 } }
   ];
   const renderers = [], signals = [];
+  let live = { edition: "java", running: true, rconEnabled: true, players: [], warnings: [], worldTimes: { world: 0, nether: 6000 } };
   const Component = mapComponent({
     "../settings": { t: (key) => key },
-    "./api": { mapError: (error) => error.message, worldMapApi: () => ({ worlds: async (signal) => { signals.push(signal); return worlds; }, tile: () => {} }) },
+    "./api": { mapError: (error) => error.message, worldMapApi: () => ({ worlds: async (signal) => { signals.push(signal); return worlds; }, tile: () => {}, players: async () => live }) },
     "./viewport": { MapViewport: class {
       constructor(canvas, world, load, changed, y) { this.camera = { ...world.spawn, zoom: 2 }; this.world = world; this.layer = y; renderers.push(this); }
       dispose() { this.disposed = true; }
@@ -502,16 +435,30 @@ test("map view validates coordinates and layers, retains the selected layer on r
     createElement: () => ({ children: [] }), createComment: () => ({}), createText: () => ({}),
     insert() {}, remove() {}, patchProp() {}, setText() {}, setElementText() {}, parentNode: () => null, nextSibling: () => null
   });
-  const app = renderer.createApp(Component, { instanceUuid: "server", daemonId: "node" });
+  const app = renderer.createApp(Component, { instanceUuid: "server", daemonId: "node", initialView: { y: 0 } });
   app.mount({ children: [] });
+  t.after(() => app.unmount());
   const view = app._instance.setupState;
   view.canvas = {};
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(renderers.length, 1);
+  assert.equal(view.worldTime, "06:00"); assert.equal(view.worldTimeIcon, "mdi-white-balance-sunny");
+  for (const [ticks, expected] of [[6000, "12:00"], [12000, "18:00"], [18000, "00:00"], [23999, "05:59"], [0, "06:00"], [-1, undefined], [24000, undefined], [NaN, undefined]]) {
+    live = { ...live, worldTimes: { world: ticks, nether: 6000 } }; await view.loadPlayers();
+    assert.equal(view.worldTime, expected);
+  }
+  live = { ...live, worldTimes: {} }; await view.loadPlayers(); assert.equal(view.worldTime, undefined);
+  for (const field of ["running", "rconEnabled"]) {
+    live = { ...live, worldTimes: { world: 6000, nether: 6000 }, [field]: false }; await view.loadPlayers(); assert.equal(view.worldTime, undefined);
+    live = { ...live, [field]: true };
+  }
+  await view.loadPlayers(); assert.equal(view.worldTime, "12:00");
   await view.load(true);
   assert.equal(renderers.length, 2);
   assert.equal(renderers[0].disposed, true);
   view.selected = "nether";
+  assert.equal(view.worldTime, "12:00");
+  view.roster.worldTimes.nether = 18000; assert.equal(view.worldTime, "00:00"); assert.equal(view.worldTimeIcon, "mdi-weather-night");
   view.selected = "world";
   await vue.nextTick();
   assert.equal(renderers.length, 3);
@@ -521,45 +468,11 @@ test("map view validates coordinates and layers, retains the selected layer on r
   assert.equal(view.error, "MC_MAP_COORDINATES");
   view.x = "-128"; view.z = "256"; view.go();
   assert.deepEqual(renderers[2].target, { x: -128, z: 256 });
-  assert.equal(view.layer, undefined);
-  view.mode = "slice";
-  assert.equal(renderers.length, 3);
-  assert.equal(renderers[2].layer, 64);
-  view.y = "0"; view.applyHeight();
-  assert.equal(renderers[2].layer, 0);
-  for (const y of ["", " ", "1.5", "2048", "-2049", "invalid"]) {
-    view.y = y; view.applyHeight();
-    assert.equal(view.heightError, "MC_MAP_HEIGHT_INVALID");
-    assert.equal(renderers[2].layer, 0);
-  }
-  view.y = "-2048"; view.applyHeight();
-  assert.equal(renderers[2].layer, -2048);
-  assert.equal(view.range.min, -2048);
-  view.y = "2047"; view.applyHeight();
-  assert.equal(renderers[2].layer, 2047);
-  assert.equal(view.range.max, 2047);
-  // VSlider updates the rendered layer immediately, without waiting for blur or mouseup.
-  for (let y = -64; y <= -63; y++) {
-    view.height = y;
-    assert.equal(renderers[2].layer, y);
-    assert.equal(view.y, String(y));
-  }
-  assert.equal(renderers[2].layer, -63);
-  assert.equal(view.heightError, "");
-  view.mode = "surface";
-  assert.equal(renderers[2].layer, undefined);
-  view.mode = "slice";
-  assert.equal(renderers[2].layer, -63);
-  await view.load(true);
-  assert.equal(renderers.length, 4);
-  assert.equal(renderers[3].layer, -63);
-  assert.equal(renderers[2].disposed, true);
-  view.selected = "nether";
-  view.y = "32"; view.applyHeight();
-  await vue.nextTick();
-  assert.equal(renderers.length, 5);
-  assert.equal(renderers[4].world.id, "nether");
-  assert.equal(renderers[4].layer, 32);
+  assert.equal(view.layer, undefined); assert.equal(view.mode, undefined); assert.equal(view.applyHeight, undefined);
+  await view.load(true); assert.equal(renderers.length, 4); assert.equal(renderers[2].disposed, true);
+  view.selected = "nether"; await vue.nextTick();
+  assert.equal(renderers.length, 5); assert.equal(renderers[4].world.id, "nether");
+  assert.equal(renderers[4].layer, undefined);
   app.unmount();
   assert.equal(renderers[4].disposed, true);
   assert(signals.every((signal) => signal.aborted));

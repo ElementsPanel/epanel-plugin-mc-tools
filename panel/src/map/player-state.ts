@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { EnableRconResult, MapPlayerRoster } from "../../../shared/map-players";
 import { t } from "../settings";
+import { useWorldClock } from "./world-clock";
 
 export interface MapPlayersApi {
   players?(signal: AbortSignal): Promise<MapPlayerRoster>;
@@ -9,6 +10,7 @@ export interface MapPlayersApi {
 
 export function useMapPlayers(api: MapPlayersApi, errorText: (error: unknown) => string) {
   const roster = ref<MapPlayerRoster>(), reading = ref(false), enabling = ref(false), prompt = ref(false);
+  const worldTimes = useWorldClock(roster);
   const error = ref(""), success = ref(""), search = ref("");
   const abort = new AbortController();
   let prompted = false, timer: ReturnType<typeof setInterval> | undefined;
@@ -33,7 +35,7 @@ export function useMapPlayers(api: MapPlayersApi, errorText: (error: unknown) =>
       const result = await api.enableRcon(abort.signal);
       if (abort.signal.aborted) return;
       success.value = t(result.restartRequested ? "MC_MAP_RCON_RESTART_REQUESTED" : "MC_MAP_RCON_ENABLED");
-      if (roster.value) { roster.value.rconEnabled = true; roster.value.players = []; }
+      if (roster.value) { roster.value.rconEnabled = true; roster.value.players = []; delete roster.value.worldTimes; }
     } catch (reason) { if (!abort.signal.aborted) error.value = enableError = errorText(reason); }
     finally { enabling.value = false; prompt.value = false; }
     if (!abort.signal.aborted) await load();
@@ -49,5 +51,5 @@ export function useMapPlayers(api: MapPlayersApi, errorText: (error: unknown) =>
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", refresh);
   });
   const dismissError = () => { error.value = enableError = ""; };
-  return { roster, reading, enabling, prompt, error, success, search, players, load, enable, dismissError };
+  return { roster, worldTimes, reading, enabling, prompt, error, success, search, players, load, enable, dismissError };
 }

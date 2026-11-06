@@ -16,7 +16,6 @@ export interface MapViewOptions {
   x?: number;
   z?: number;
   zoom?: number;
-  y?: number;
   render?: "3d";
 }
 
@@ -92,15 +91,6 @@ export function mapSceneCoordinate(value: unknown) {
 
 export function mapCoordinate(value: unknown) {
   if (typeof value !== "number" || !Number.isInteger(value) || Math.abs(value) > Math.ceil(MAP_LIMIT / MAP_TILE_SIZE)) {
-    throw new Error("MC_MAP_INVALID");
-  }
-  return value;
-}
-
-/** Omitting Y keeps the surface view; a number selects an exact horizontal slice. */
-export function mapHeight(value: unknown): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < MAP_MIN_Y || value > MAP_MAX_Y) {
     throw new Error("MC_MAP_INVALID");
   }
   return value;
