@@ -41,10 +41,10 @@ test("viewport limits tile loading and cancels requests, animation frames, and l
   const runFrame = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback()); };
   runFrame();
   assert.equal(canvas.width, 1024);
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 6);
   view.center(-100, 100);
   runFrame();
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 6);
   const before = changed;
   view.dispose();
   assert.equal(disconnected, 1);
@@ -476,4 +476,30 @@ test("map view validates coordinates, ignores old slice options, refreshes clock
   app.unmount();
   assert.equal(renderers[4].disposed, true);
   assert(signals.every((signal) => signal.aborted));
+});
+
+test("idle frames warm the ring around the viewport and never surface its failures", async (t) => {
+  const f = animatedViewport(t);
+  f.frame(0);
+  const visible = f.requests.map((request) => `${request.x}:${request.z}`);
+  assert(visible.length > 0);
+  f.requests.splice(0).forEach((request) => request.resolve({ image: "", warnings: 0 }));
+  await new Promise((resolve) => setImmediate(resolve));
+  f.frame(16);
+  const ring = f.requests.splice(0);
+  assert.equal(ring.length, 2, "two ring tiles per idle frame");
+  const touches = (x, z) => visible.some((key) => {
+    const [vx, vz] = key.split(":").map(Number);
+    return Math.abs(vx - x) <= 1 && Math.abs(vz - z) <= 1;
+  });
+  for (const request of ring) {
+    assert(!visible.includes(`${request.x}:${request.z}`), "ring tiles are outside the viewport");
+    assert(touches(request.x, request.z), "ring tiles touch the viewport");
+  }
+  ring[0].reject(new Error("MC_MAP_READ_FAILED"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.view.error, undefined, "a background tile cannot raise the error banner");
+  assert.equal(f.states.at(-1).loading, 0, "background prefetch is not reported as map loading");
+  f.frame(32);
+  assert(!f.requests.some((request) => request.x === ring[0].x && request.z === ring[0].z), "a failed ring tile is not retried");
 });

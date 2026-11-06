@@ -88,6 +88,7 @@ export class MapViewport {
   private rotating?: number;
   private bearing = 0;
   private active = 0;
+  private background = 0;
   private error?: unknown;
   private zoomAnimation?: ZoomAnimation;
   private readonly reducedMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : undefined;
@@ -393,11 +394,32 @@ export class MapViewport {
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
     });
     this.changed({ x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, bearing: this.bearing,
-      loading: needed.length + this.active + (this.wantsScene ? this.detailState?.loading || 0 : 0) + Number(this.detailLoading),
+      loading: needed.length + this.active - this.background + (this.wantsScene ? this.detailState?.loading || 0 : 0) + Number(this.detailLoading),
       warnings: Math.max(warnings, this.wantsScene ? this.detailState?.warnings || 0 : 0), limited: this.wantsScene && this.detailState?.limited,
       error: this.error ?? (this.wantsScene ? this.detailError ?? this.detailState?.error : undefined) });
-    for (const item of needed.slice(0, Math.max(0, 3 - this.active))) this.fetchTile(item);
+    // The daemon renders a few tiles in parallel; keeping the queue deeper hides the
+    // per-tile latency instead of waiting for one image before starting the next.
+    for (const item of needed.slice(0, Math.max(0, 6 - this.active))) this.fetchTile(item);
+    if (!needed.length && this.active === this.background) this.prefetch(visible);
     if (animating) this.schedule();
+  }
+
+  /** Warm the ring around the viewport once it settled, so panning shows terrain at once. */
+  private prefetch(visible: { x: number; z: number; key: string }[]) {
+    const limit = Math.ceil(MAP_LIMIT / MAP_TILE_SIZE);
+    const seen = new Set(visible.map((item) => item.key));
+    const ring: { x: number; z: number; key: string }[] = [];
+    for (const item of visible) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = item.x + dx, z = item.z + dz, key = `${x}:${z}`;
+      if (seen.has(key) || Math.abs(x) > limit || Math.abs(z) > limit) continue;
+      seen.add(key);
+      const cacheKey = tileKey(key);
+      if (this.cache.has(cacheKey) || this.pending.has(cacheKey) || this.failed.has(cacheKey)) continue;
+      ring.push({ x, z, key });
+    }
+    ring.sort((a, b) => Math.hypot(a.x * MAP_TILE_SIZE - this.camera.x, a.z * MAP_TILE_SIZE - this.camera.z)
+      - Math.hypot(b.x * MAP_TILE_SIZE - this.camera.x, b.z * MAP_TILE_SIZE - this.camera.z));
+    for (const item of ring.slice(0, 2)) void this.fetchTile(item, true);
   }
 
   private drawMarkers(context: CanvasRenderingContext2D) {
@@ -535,10 +557,11 @@ export class MapViewport {
     this.detailOpacity = 0; this.detailFade = undefined;
   }
 
-  private async fetchTile(item: { x: number; z: number; key: string }) {
+  private async fetchTile(item: { x: number; z: number; key: string }, background = false) {
     const signal = this.abort.signal;
     const key = tileKey(item.key);
     this.active++;
+    if (background) this.background++;
     this.pending.add(key);
     try {
       const result = await this.load(this.world.id, item.x, item.z, signal);
@@ -556,12 +579,14 @@ export class MapViewport {
       }
     } catch (error) {
       if (!signal.aborted) {
-        this.error = error;
+        // A background ring tile must not raise the visible map's error banner.
+        if (!background) this.error = error;
         this.failed.add(key);
       }
     } finally {
       if (!signal.aborted) {
         this.active--;
+        if (background) this.background--;
         this.pending.delete(key);
         this.schedule();
       }

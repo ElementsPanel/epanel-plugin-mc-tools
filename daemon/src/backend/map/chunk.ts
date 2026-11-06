@@ -1,5 +1,6 @@
 import { blockColor, isAir, legacyBlockName } from "./colors";
 import { blockFluid } from "./materials";
+import { ChunkLongs } from "./nbt";
 
 function unsignedLong(value: any): bigint {
   if (typeof value === "bigint") return BigInt.asUintN(64, value);
@@ -8,22 +9,46 @@ function unsignedLong(value: any): bigint {
 }
 
 /** Java 1.13-1.15 pack across longs; 1.16+ pad each long independently. */
-export function paletteReader(data: any[] | undefined, size: number, version: number, count = 4096, minimumBits = 4) {
+export function paletteReader(data: ArrayLike<unknown> | ChunkLongs | undefined, size: number, version: number, count = 4096, minimumBits = 4) {
   const bits = Math.max(minimumBits, Math.ceil(Math.log2(size)));
-  const mask = (1n << BigInt(bits)) - 1n;
-  const longs = (data || []).map(unsignedLong);
+  const mask = (1 << bits) - 1;
+  const longs: ArrayLike<unknown> = data || [];
   const perLong = Math.floor(64 / bits);
   const padded = version >= 2529 || (bits !== 4 && longs.length === Math.ceil(count / perLong));
   if (size > 1 && longs.length < (padded ? Math.ceil(count / perLong) : Math.ceil(count * bits / 64))) throw new Error("MC_MAP_CORRUPT");
+  const length = longs.length;
+  // Splitting every long up front dominates the cost of a surface scan, which reads
+  // one to three blocks per column; split nothing until the first read asks for it.
+  let high: Uint32Array | undefined, low: Uint32Array | undefined, ready = false;
+  const split = () => {
+    if (ready) return;
+    ready = true;
+    high = new Uint32Array(length); low = new Uint32Array(length);
+    if (data instanceof ChunkLongs) data.split(high, low);
+    else for (let i = 0; i < length; i++) {
+      const value = unsignedLong(longs[i]);
+      high[i] = Number(value >> 32n) >>> 0;
+      low[i] = Number(value & 0xffffffffn);
+    }
+  };
   return (index: number) => {
     if (size === 1) return 0;
-    if (padded) return Number((longs[Math.floor(index / perLong)] >> BigInt((index % perLong) * bits)) & mask);
+    if (!ready) split();
     const bit = index * bits;
-    const slot = Math.floor(bit / 64);
-    const shift = bit % 64;
-    let value = longs[slot] >> BigInt(shift);
-    if (shift + bits > 64) value |= longs[slot + 1] << BigInt(64 - shift);
-    return Number(value & mask);
+    const slot = padded ? Math.floor(index / perLong) : Math.floor(bit / 64);
+    const shift = padded ? (index % perLong) * bits : bit % 64;
+    let value: number;
+    if (shift >= 32) {
+      const top = high![slot];
+      if (bits <= 64 - shift) value = top >>> (shift - 32);
+      else {
+        const next = low![slot + 1];
+        if (next === undefined) throw new Error("MC_MAP_CORRUPT");
+        value = (top >>> (shift - 32)) | (next << (64 - shift));
+      }
+    } else if (shift === 0) value = low![slot];
+    else value = (low![slot] >>> shift) | (high![slot] << (32 - shift));
+    return value & mask;
   };
 }
 

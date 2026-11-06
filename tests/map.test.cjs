@@ -275,19 +275,19 @@ test("map service limits simultaneous renders, bounds its queue, and coalesces r
     active--; completed++;
     return { image: "image", chunks: 1, warnings: 0 };
   };
-  const requests = Array.from({ length: 35 }, (_, index) => service.tile("server", "world", index, 0).catch((error) => error));
+  const requests = Array.from({ length: 70 }, (_, index) => service.tile("server", "world", index, 0).catch((error) => error));
   const duplicate = service.tile("server", "world", 0, 0);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(gates.length, 2);
-  while (completed < 34) {
+  assert.equal(gates.length, 4);
+  while (completed < 68) {
     for (const gate of gates.splice(0)) gate.resolve();
     await new Promise((resolve) => setImmediate(resolve));
   }
   const results = await Promise.all(requests);
-  assert.equal(results.filter((result) => result.message === "MC_MAP_BUSY").length, 1);
-  assert.equal(peak, 2);
+  assert.equal(results.filter((result) => result.message === "MC_MAP_BUSY").length, 2);
+  assert.equal(peak, 4);
   assert.equal(await duplicate, results[0]);
-  assert.equal(completed, 34);
+  assert.equal(completed, 68);
   await service.dispose();
 });
 

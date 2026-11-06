@@ -4,9 +4,10 @@ import type { BiomeTint } from "./biome-blend";
 
 export interface Material { name: string; color: number; model: MinecraftBlock; kind: SceneKind; emissive: boolean; biomeTint?: BiomeTint; fire?: number }
 
+const fluidNames = new Set(["water", "flowing_water", "seagrass", "tall_seagrass", "kelp", "kelp_plant", "bubble_column"]);
 export function blockFluid(name: string, properties?: Readonly<Record<string, string>>) {
-  return properties?.waterlogged === "true" || properties?.waterlogged === "1" ||
-    /^(?:minecraft:)?(?:water|flowing_water|seagrass|tall_seagrass|kelp|kelp_plant|bubble_column)$/.test(name) ? "minecraft:water" : undefined;
+  if (properties?.waterlogged === "true" || properties?.waterlogged === "1") return "minecraft:water";
+  return fluidNames.has(name.replace(/^minecraft:/, "")) ? "minecraft:water" : undefined;
 }
 const plants = /^(?:short_grass|tall_grass|fern|large_fern|dead_bush|.*sapling|dandelion|poppy|blue_orchid|allium|azure_bluet|.*tulip|oxeye_daisy|cornflower|lily_of_the_valley|wither_rose|sunflower|lilac|rose_bush|peony|wheat|carrots|potatoes|beetroots|brown_mushroom|red_mushroom|sugar_cane|vine|cave_vines|kelp|seagrass|tall_seagrass)$/;
 // BlockColors registers only these plants/leaves for biome tinting. In particular,

@@ -32,7 +32,9 @@ export class WorldMapService {
     if (!instance) throw new Error("MC_MAP_INSTANCE_MISSING");
     const key = instanceUuid + ":" + instance.absoluteCwdPath();
     const cached = this.catalog.get(key);
-    if (!refresh && cached && Date.now() - cached.at < 5000) return cached.worlds;
+    // Scanning every world folder reads level.dat, so it must not run between tiles;
+    // an explicit refresh still bypasses this cache.
+    if (!refresh && cached && Date.now() - cached.at < 60_000) return cached.worlds;
     const current = this.loadingWorlds.get(key);
     if (current) {
       if (!refresh) return current;
@@ -153,8 +155,10 @@ export class WorldMapService {
 
   private async limited<T>(run: () => Promise<T>) {
     if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
-    if (this.active >= 2) {
-      if (this.waiting.length >= 32) throw new Error("MC_MAP_BUSY");
+    // Rendering is I/O and zlib bound, so a couple of parallel tiles overlap well;
+    // the parser itself is synchronous, which keeps the ceiling small.
+    if (this.active >= 4) {
+      if (this.waiting.length >= 64) throw new Error("MC_MAP_BUSY");
       await new Promise<void>((resolve) => this.waiting.push(resolve));
     } else this.active++;
     if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
@@ -237,7 +241,7 @@ export class WorldMapService {
       this.evictTile(key);
       const bytes = tile.image.length;
       this.cache.set(key, { stamp, tile, bytes }); this.tileBytes += bytes;
-      while (this.cache.size > 128 || this.tileBytes > 32 * 1024 * 1024) this.evictTile(this.cache.keys().next().value!);
+      while (this.cache.size > 256 || this.tileBytes > 48 * 1024 * 1024) this.evictTile(this.cache.keys().next().value!);
     }
     return tile;
   }

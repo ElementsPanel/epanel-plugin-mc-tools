@@ -43,9 +43,31 @@ const legacy: Record<number, string> = {
 };
 
 export const legacyBlockName = (id: number) => id === 0 ? "air" : legacy[id] || "stone";
-export const isAir = (name: string) => /^(?:minecraft:)?(?:air|cave_air|void_air|structure_void|light|barrier)$/.test(name);
 
+// The surface scan asks these two questions once per block column, so the answers
+// are cached: a regex per block was a tenth of the whole tile.
+const airs = new Set(["air", "cave_air", "void_air", "structure_void", "light", "barrier"]);
+const air: Record<string, boolean> = {};
+export function isAir(name: string) {
+  const cached = air[name];
+  if (cached !== undefined) return cached;
+  const bare = name.replace(/^minecraft:/, "");
+  const value = airs.has(bare);
+  air[name] = value;
+  return value;
+}
+
+const colorCache = new Map<string, number>();
 export function blockColor(block: string): number {
+  const cached = colorCache.get(block);
+  if (cached !== undefined) return cached;
+  const value = colorOf(block);
+  if (colorCache.size > 4096) colorCache.clear();
+  colorCache.set(block, value);
+  return value;
+}
+
+function colorOf(block: string): number {
   const name = block.replace(/^.*:/, "");
   if (named[name] !== undefined) return named[name];
   if (name.includes("cherry_leaves")) return 0xd99bb6;
