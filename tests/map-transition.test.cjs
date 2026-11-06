@@ -64,7 +64,7 @@ test("terrain textures premultiply before mip filtering and water remains visibl
   texture.dispose(); materials[0].uniforms.uAnimation.value.dispose(); materials.forEach(material => material.dispose());
 });
 
-function sceneFixture(t, reduced = false, topDown = false, actualControls = false, scale = 1) {
+function sceneFixture(t, reduced = false, topDown = false, actualControls = false, scale = 1, options = {}) {
   const globals = ["ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame", "devicePixelRatio", "matchMedia"];
   const originals = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const frames = new Map(), rendered = [], listeners = new Map();
@@ -100,16 +100,72 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
   const initial = { x: 8.25, z: -16.375, zoom: 4 };
   const heights = Buffer.alloc(2048); for (let i = 0; i < 1024; i++) heights.writeInt16LE(64, i * 2);
   const quad = Buffer.alloc(16); quad.writeInt16LE(65, 2); quad.writeUInt16LE(1, 4); quad.writeUInt16LE(1, 6); quad[8] = 2;
-  const requests = [];
+  const requests = [], states = [];
   const view = new SceneViewport(canvas, { id: "world", dimension: "minecraft:overworld", spawn: { x: 8, z: -16 } }, async (world, x, z, signal, y) => {
-    requests.push({ world, x, z, signal, y });
-    return { version: 1, heights: heights.toString("base64"), quads: quad.toString("base64"), chunks: 1, warnings: 0, limited: false };
-  }, () => {}, undefined, topDown ? "orthographic" : "perspective");
+    const request = { world, x, z, signal, y }; requests.push(request);
+    const result = { version: 1, heights: heights.toString("base64"), quads: quad.toString("base64"), chunks: 1, warnings: 0, limited: false };
+    return options.load ? options.load(request, result) : result;
+  }, state => states.push(state), undefined, topDown ? "orthographic" : "perspective");
   view.camera.zoom = initial.zoom; view.center(initial.x, initial.z);
-  const frame = time => { now = time; const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(fn => fn(time)); };
+  const frame = time => {
+    now = time;
+    for (const id of [...frames.keys()]) { const fn = frames.get(id); frames.delete(id); fn?.(time); }
+  };
   t.after(() => { view.dispose(); for (const key of globals) { const original = originals.get(key); if (original) Object.defineProperty(globalThis, key, original); else delete globalThis[key]; } });
-  return { view, frame, ready: () => ready(), frames, rendered, listeners, uniforms, requests, visibleTopDownTiles };
+  return { view, frame, ready: () => ready(), frames, rendered, listeners, uniforms, requests, states, visibleTopDownTiles };
 }
+
+test("top-down camera updates render synchronously and consume the queued GPU frame", t => {
+  const f = sceneFixture(t, true, true); f.ready(); f.frame(0);
+  const count = f.rendered.length;
+  f.view.setTopDownView({ x: -37.5, z: 24.25, zoom: 5 }, 800, 600);
+  assert.equal(f.rendered.length, count);
+  f.view.renderTopDown();
+  assert.equal(f.rendered.length, count + 1);
+  assert.equal(f.frames.size, 0);
+  const camera = f.rendered.at(-1).camera;
+  near(camera.position.x + f.view.origin.x, -37.5); near(camera.position.z + f.view.origin.z, 24.25);
+  f.view.renderTopDown(); assert.equal(f.rendered.length, count + 1);
+  f.view.setProjection("perspective"); f.view.renderTopDown();
+  assert.equal(f.rendered.length, count + 1, "orbit transitions keep their animation scheduling");
+});
+
+test("top-down prefetch warms every edge, prioritizes visible tiles, and reveals cached geometry immediately on a drag", async t => {
+  let hold = false;
+  const f = sceneFixture(t, true, true, false, 1, { load: (_request, result) => hold ? new Promise(() => {}) : result });
+  f.ready();
+  const initial = { ...f.view.camera };
+  const visible = f.visibleTopDownTiles(initial, 1100, 700);
+  for (let i = 0; i < 160; i++) { f.frame(i * 16); await tick(); if (!f.frames.size) break; }
+  assert.equal(f.frames.size, 0);
+  assert.equal(f.states.at(-1).loading, 0);
+  assert(f.requests.length > visible.length);
+  assert.deepEqual(new Set(f.requests.slice(0, visible.length).map(tile => `${tile.x}:${tile.z}`)), new Set(visible.map(tile => tile.position)));
+  assert(f.states.some(state => state.loading === 0) && f.view.cache.size > visible.length);
+  hold = true;
+  for (const [dx, dz] of [[48, 0], [-48, 0], [0, 48], [0, -48], [48, 48], [-48, -48]]) {
+    const camera = { ...initial, x: initial.x + dx, z: initial.z + dz };
+    f.view.setTopDownView(camera, 1100, 700); f.view.renderTopDown();
+    assert.equal(f.states.at(-1).loading, 0, "background requests must not appear as visible map loading");
+    for (const item of f.visibleTopDownTiles(camera, 1100, 700)) {
+      const tile = f.view.displayed.get(item.position);
+      assert(tile?.group.visible && tile.group.children.length, `edge ${item.position} must already have renderable geometry`);
+    }
+    assert(f.view.pending.size <= 2);
+  }
+});
+
+test("prefetch stays bounded at the cache limit without evicting visible corners or repeatedly fetching tiles", async t => {
+  const f = sceneFixture(t, true, true); f.ready();
+  f.view.setTopDownView({ x: 0, z: 0, zoom: 4 }, 1800, 1800);
+  for (let i = 0; i < 260; i++) { f.frame(i * 16); await tick(); if (!f.frames.size) break; }
+  assert.equal(f.frames.size, 0, "a full prefetch cache must stop requesting and rendering");
+  assert(f.view.cache.size <= 256); assert(f.view.faces <= 1_200_000);
+  assert.equal(f.states.at(-1).loading, 0); assert.equal(f.states.at(-1).limited, false);
+  const requests = f.requests.map(tile => `${tile.y}:${tile.x}:${tile.z}`);
+  assert.equal(new Set(requests).size, requests.length);
+  for (const item of f.visibleTopDownTiles(f.view.camera, 1800, 1800)) assert(f.view.cache.has(`surface:${item.position}`));
+});
 
 test("scene sizing ignores ancestor transforms and rounds the GPU buffer to match the color layer", t => {
   const f = sceneFixture(t, true, true, false, .9); f.ready(); f.frame(0);

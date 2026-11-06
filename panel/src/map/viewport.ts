@@ -16,6 +16,7 @@ interface DisplayTile { tile: Tile; previous?: Tile; startedAt: number; duration
 interface ZoomAnimation { from: number; to: number; x: number; y: number; startedAt: number }
 
 const TILE_FADE_DURATION = 240;
+const DETAIL_FADE_DURATION = 240;
 const LAYER_FADE_DURATION = 100;
 const ZOOM_DURATION = 200;
 const easeOut = (progress: number) => 1 - Math.pow(1 - progress, 3);
@@ -64,6 +65,7 @@ export class MapViewport {
   private detailCanvas?: HTMLCanvasElement;
   private backdropCanvas?: HTMLCanvasElement;
   private detailFrame?: { camera: Camera; width: number; height: number; orthographic: boolean; y?: number };
+  private detailAppearedAt?: number;
   private mode: "2d" | "3d" = "2d";
   private detailState?: MapViewState;
   private detailGeneration = 0;
@@ -284,7 +286,7 @@ export class MapViewport {
     const foreground = this.canvas.getContext("2d");
     if (!foreground) return;
     this.updateDetail();
-    this.presentScene();
+    this.presentScene(time);
     const context = this.backdropCanvas?.getContext("2d") ?? foreground;
     const ratio = this.canvas.width / this.width, ratioY = this.canvas.height / this.height;
     for (const layer of new Set([foreground, context])) {
@@ -367,13 +369,28 @@ export class MapViewport {
   }
 
   private get wantsScene() { return this.mode === "3d" || this.camera.zoom >= MAP_DETAIL_ZOOM || !!this.detail?.isTransitioning; }
-  private get sceneVisible() { return this.wantsScene && this.detail?.ready && !!this.detailCanvas?.width && this.detailFrame?.y === this.sliceY; }
+  private get sceneVisible() {
+    return this.wantsScene && this.detail?.ready && !!this.detailCanvas?.width && this.detailFrame?.y === this.sliceY
+      && (this.mode === "3d" || !this.detailFrame?.orthographic || this.detailAppearedAt !== undefined || this.detailState?.loading === 0);
+  }
 
-  private presentScene() {
+  private presentScene(time = performance.now()) {
     const canvas = this.detailCanvas, frame = this.detailFrame;
     if (!canvas) return;
-    canvas.style.visibility = this.sceneVisible && frame ? "visible" : "hidden";
-    if (!frame) return;
+    if (!this.sceneVisible || !frame) {
+      canvas.style.visibility = "hidden";
+      canvas.style.opacity = "0";
+      this.detailAppearedAt = undefined;
+      return;
+    }
+    // Reveal a complete top-down footprint over the color map. Background
+    // prefetches and later pans must not restart the fade or hide loaded terrain.
+    this.detailAppearedAt ??= time;
+    const progress = this.reducedMotion?.matches || !frame.orthographic || this.mode === "3d"
+      ? 1 : Math.max(0, Math.min(1, (time - this.detailAppearedAt) / DETAIL_FADE_DURATION));
+    canvas.style.visibility = "visible";
+    canvas.style.opacity = String(easeOut(progress));
+    if (progress < 1) this.schedule();
     // Composite WebGL directly. Copying it with 2D drawImage can swap R/B channels
     // on accelerated browser backends, including for textures without biome tint.
     const scale = frame.orthographic ? this.camera.zoom / frame.camera.zoom : 1;
@@ -394,7 +411,10 @@ export class MapViewport {
     if (this.detailUnavailable) return;
     if (this.detail) {
       this.detail.setActive(true);
-      if (this.mode === "2d") this.detail.setTopDownView(this.camera, this.width, this.height);
+      if (this.mode === "2d") {
+        this.detail.setTopDownView(this.camera, this.width, this.height);
+        this.detail.renderTopDown();
+      }
       else this.detail.setSize(this.width, this.height);
       return;
     }
@@ -447,6 +467,7 @@ export class MapViewport {
     }
     this.backdropCanvas = undefined;
     this.detailCanvas = undefined; this.detailFrame = undefined; this.detailState = undefined;
+    this.detailAppearedAt = undefined;
   }
 
   private async fetchTile(item: { x: number; z: number; key: string }) {

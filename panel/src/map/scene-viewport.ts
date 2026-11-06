@@ -8,7 +8,7 @@ import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjectio
 import { SceneKind } from "../../../shared/scene";
 import { sortTransparentFaces } from "./scene-transparency";
 
-const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000;
+const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
 const tileKey = (x: number, z: number, y?: number) => `${y ?? "surface"}:${x}:${z}`;
 const clamp = (value: number) => Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, value));
 interface SceneTile { x: number; z: number; key: string; position: string; group: Group; heights: Int16Array; count: number; warnings: number; limited: boolean; animated: boolean }
@@ -23,8 +23,8 @@ export function visibleSceneTiles(camera: Camera) {
   return tiles.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
 }
 
-export function visibleTopDownTiles(camera: Camera, width: number, height: number) {
-  const halfWidth = width / camera.zoom / 2, halfHeight = height / camera.zoom / 2;
+export function visibleTopDownTiles(camera: Camera, width: number, height: number, margin = 0) {
+  const halfWidth = width / camera.zoom / 2 + margin, halfHeight = height / camera.zoom / 2 + margin;
   const limit = Math.ceil(MAP_LIMIT / SIZE), tiles: { x: number; z: number; position: string }[] = [];
   for (let z = Math.max(-limit, Math.floor((camera.z - halfHeight) / SIZE)); z <= Math.min(limit, Math.floor((camera.z + halfHeight) / SIZE)); z++) {
     for (let x = Math.max(-limit, Math.floor((camera.x - halfWidth) / SIZE)); x <= Math.min(limit, Math.floor((camera.x + halfWidth) / SIZE)); x++) tiles.push({ x, z, position: `${x}:${z}` });
@@ -53,6 +53,7 @@ export class SceneViewport implements MapRenderer {
   private readonly failed = new Set<string>();
   private readonly skipped = new Set<string>();
   private visible = new Set<string>();
+  private wanted = new Set<string>();
   private origin = { x: 0, z: 0 };
   private anchor = "";
   private faces = 0;
@@ -152,6 +153,13 @@ export class SceneViewport implements MapRenderer {
     this.setSize(width, height);
     if (camera.zoom !== this.topZoom) this.setZoom(camera.zoom);
     if (camera.x !== this.camera.x || camera.z !== this.camera.z) this.center(camera.x, camera.z);
+  }
+
+  /** Paint pending top-down changes in the same browser frame as the 2D map. */
+  renderTopDown() {
+    if (!this.topDown || this.transition || !this.frame || !this.active || this.lost || this.abort.signal.aborted) return;
+    cancelAnimationFrame(this.frame); this.frame = 0;
+    this.draw();
   }
 
   center(x: number, z: number) {
@@ -254,12 +262,17 @@ export class SceneViewport implements MapRenderer {
       const coverage = new Map([...visibleTopDownTiles(this.camera, this.width, this.height), ...visibleSceneTiles(this.camera)].map(tile => [tile.position, tile]));
       tiles = [...coverage.values()].sort((a, b) => this.distance(a) - this.distance(b));
     }
-    const anchor = `${Math.floor(x / SIZE)}:${Math.floor(z / SIZE)}:${tiles.length}`;
+    const anchor = tiles.map(tile => tile.position).sort().join("|");
     if (this.anchor !== anchor) { this.anchor = anchor; this.skipped.clear(); this.failed.clear(); }
     this.visible = new Set(tiles.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
+    // Fetch the visible footprint first, then keep two rings of ready geometry
+    // outside every edge. Moving the camera can reveal them without a request.
+    const buffered = this.topDown && !this.transition ? visibleTopDownTiles(this.camera, this.width, this.height, PREFETCH_MARGIN) : [];
+    const coverage = [...tiles, ...buffered.filter(tile => !this.visible.has(tileKey(tile.x, tile.z, this.sliceY)))];
+    this.wanted = new Set(coverage.map(tile => tileKey(tile.x, tile.z, this.sliceY)));
     const positions = new Set(tiles.map(tile => tile.position));
     for (const [position, tile] of this.displayed) if (!positions.has(position)) { tile.group.visible = false; this.displayed.delete(position); }
-    let warnings = 0, limited = !!this.skipped.size, count = 0, animated = false;
+    let warnings = 0, limited = [...this.skipped].some(key => this.visible.has(key)), count = 0, animated = false;
     for (const item of tiles) {
       const tile = this.cache.get(tileKey(item.x, item.z, this.sliceY)) ?? this.displayed.get(item.position);
       if (!tile) continue;
@@ -305,11 +318,12 @@ export class SceneViewport implements MapRenderer {
         transform.multiplyMatrices(activeCamera.matrixWorldInverse, mesh.matrixWorld));
     }
     this.renderer.render(this.scene, activeCamera);
-    const needed = tiles.filter(tile => {
+    const needed = coverage.filter(tile => {
       const key = tileKey(tile.x, tile.z, this.sliceY);
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key) && !this.skipped.has(key);
     });
-    const loading = needed.length + this.pending.size;
+    const loading = needed.filter(tile => this.visible.has(tileKey(tile.x, tile.z, this.sliceY))).length
+      + [...this.pending].filter(key => this.visible.has(key)).length;
     this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 2 - this.pending.size))) void this.fetch(item);
     if (settling || transitioning) this.schedule();
@@ -350,11 +364,18 @@ export class SceneViewport implements MapRenderer {
 
   private room(count: number, incoming: { x: number; z: number }) {
     const maxTiles = 256;
+    const incomingKey = tileKey(incoming.x, incoming.z, this.sliceY), incomingVisible = this.visible.has(incomingKey);
     while (this.cache.size >= maxTiles || this.faces + count > MAX_FACES) {
-      const candidates = [...this.cache.values()].sort((a, b) => Number(this.visible.has(a.key)) - Number(this.visible.has(b.key)) || this.distance(b) - this.distance(a));
+      // Late responses can still be reused after a reversal, but must not evict
+      // geometry needed by the current view or its prefetch margin.
+      if (!this.wanted.has(incomingKey)) return false;
+      const candidates = [...this.cache.values()].sort((a, b) => Number(this.visible.has(a.key)) - Number(this.visible.has(b.key))
+        || Number(this.wanted.has(a.key)) - Number(this.wanted.has(b.key)) || this.distance(b) - this.distance(a));
       const oldest = candidates[0];
-      if (!oldest || this.visible.has(oldest.key) && this.distance(oldest) <= this.distance(incoming)) return false;
-      if (this.visible.has(oldest.key)) this.skipped.add(oldest.key);
+      if (!oldest) return false;
+      if (this.visible.has(oldest.key) && (!incomingVisible || this.distance(oldest) <= this.distance(incoming))) return false;
+      if (!incomingVisible && this.wanted.has(oldest.key) && this.distance(oldest) <= this.distance(incoming)) return false;
+      if (this.wanted.has(oldest.key)) this.skipped.add(oldest.key);
       this.remove(oldest);
     }
     return true;
@@ -372,7 +393,7 @@ export class SceneViewport implements MapRenderer {
     this.pending.add(key);
     try {
       const result = await this.load(this.world.id, item.x, item.z, signal, y);
-      if (signal.aborted || y !== this.sliceY || !this.visible.has(key)) return;
+      if (signal.aborted || y !== this.sliceY) return;
       const decoded = decodeScene(result);
       if (!this.room(decoded.count, item)) { this.skipped.add(key); return; }
       const group = new Group(); group.visible = false;
@@ -395,7 +416,10 @@ export class SceneViewport implements MapRenderer {
       const tile = { ...item, key, group, heights: decoded.heights, count: decoded.count, warnings: decoded.warnings, limited: decoded.limited, animated: decoded.animated };
       this.cache.set(key, tile); this.scene.add(group); this.faces += tile.count;
     } catch (error) {
-      if (!signal.aborted && y === this.sliceY) { this.failed.add(key); this.error = error; }
+      if (!signal.aborted && y === this.sliceY) {
+        this.failed.add(key);
+        if (this.visible.has(key)) this.error = error;
+      }
     } finally {
       this.pending.delete(key); this.schedule();
     }

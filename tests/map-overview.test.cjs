@@ -24,9 +24,11 @@ function overview(t, options = {}) {
   const originals = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const frames = new Map(), imports = [], renderers = [], requests = [], draws = [], states = [], layers = [], observers = [], listeners = new Map();
   const bounds = { width: 800, height: 600, scale: options.scale ?? 1 };
-  let sequence = 0;
+  let sequence = 0, now = 0;
+  const motion = { matches: true };
+  t.mock.method(performance, "now", () => now);
   Object.assign(globalThis, {
-    devicePixelRatio: 1.5, matchMedia: () => ({ matches: true }),
+    devicePixelRatio: 1.5, matchMedia: () => motion,
     ResizeObserver: class {
       constructor(callback) { this.callback = callback; observers.push(this); }
       observe(target) { this.target = target; } disconnect() {}
@@ -44,6 +46,7 @@ function overview(t, options = {}) {
     setTopDownView(camera, width, height) {
       Object.assign(this.camera, camera); this.setSize(width, height);
     }
+    renderTopDown() {}
     get nextView() { return { camera: { ...this.camera }, width: this.width, height: this.height }; }
     setSize(width, height) {
       this.width = width; this.height = height;
@@ -93,7 +96,10 @@ function overview(t, options = {}) {
   const view = new MapViewport(canvas, { id: "world", spawn: { x: 8.25, z: -16.375 } }, (world, x, z, signal, y) => {
     const gate = deferred(); requests.push({ ...gate, signal, y }); return gate.promise;
   }, state => states.push(state), options.y, loadScene);
-  const frame = () => { draws.length = 0; const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(fn => fn(0)); };
+  const frame = (time = now) => {
+    now = time; draws.length = 0;
+    for (const id of [...frames.keys()]) { const fn = frames.get(id); frames.delete(id); fn?.(time); }
+  };
   const zoom = value => { view.zoom(value / view.camera.zoom); frame(); };
   const ready = async () => { imports.at(-1).resolve({ SceneViewport }); await tick(); return renderers.at(-1); };
   const resize = (width, height, ratio) => {
@@ -105,8 +111,54 @@ function overview(t, options = {}) {
     view.dispose();
     for (const key of globals) { const original = originals.get(key); if (original) Object.defineProperty(globalThis, key, original); else delete globalThis[key]; }
   });
-  return { view, canvas, frame, zoom, ready, imports, renderers, requests, draws, frames, states, layers, bounds, resize, listeners, SceneViewport, loadScene };
+  return { view, canvas, frame, zoom, ready, imports, renderers, requests, draws, frames, states, layers, bounds, resize, listeners, SceneViewport, loadScene, motion };
 }
+
+test("zoomed-in detail waits for visible geometry, fades over the backdrop, and stays opaque during later loads and pans", async t => {
+  const f = overview(t); f.frame();
+  f.requests[0].resolve({ image: "color-tile", warnings: 0 }); await tick(); f.frame();
+  f.zoom(4);
+  const detail = await f.ready(); detail.ready = true; f.motion.matches = false;
+  detail.render({ loading: 2 }); f.frame(1000);
+  assert.equal(detail.canvas.style.visibility, "hidden");
+  assert.equal(detail.canvas.style.opacity, "0");
+  assert(f.draws.some(draw => draw.image?.url === "data:image/png;base64,color-tile"));
+  detail.render(); f.frame(1000);
+  assert.equal(detail.canvas.style.visibility, "visible");
+  assert.equal(detail.canvas.style.opacity, "0");
+  f.frame(1120);
+  const alpha = Number(detail.canvas.style.opacity);
+  assert(alpha > 0 && alpha < 1);
+  assert.deepEqual(f.draws.at(-1), { marker: true, target: "foreground" });
+  f.view.center(10, -14); detail.render({ loading: 2 }); f.frame(1160);
+  assert(Number(detail.canvas.style.opacity) > alpha, "panning does not restart the fade");
+  f.frame(1240); f.frame(1256);
+  assert.equal(detail.canvas.style.opacity, "1"); assert.equal(f.frames.size, 0);
+  detail.render({ loading: 2 }); f.frame(1300);
+  assert.equal(detail.canvas.style.opacity, "1");
+  f.view.camera.zoom = 2; f.view.center(10, -14); f.frame(1400);
+  assert.equal(detail.canvas.style.opacity, "0");
+  f.view.camera.zoom = 4; detail.render(); f.view.center(10, -14); f.frame(1500);
+  assert(Number(detail.canvas.style.opacity) < 1, "returning to a cached scene fades it in again");
+  f.motion.matches = true; f.frame(1516);
+  assert.equal(detail.canvas.style.opacity, "1");
+  f.frame(1532); assert.equal(f.frames.size, 0);
+  f.motion.matches = false; f.view.camera.zoom = 2; f.view.center(10, -14); f.frame(1600);
+  f.view.camera.zoom = 4; f.view.center(10, -14); f.frame(1616);
+  assert(f.frames.size > 0); f.view.dispose(); assert.equal(f.frames.size, 0);
+});
+
+test("dragging refreshes the full detail canvas before compositing the moved 2D map", async t => {
+  const f = overview(t); f.zoom(4);
+  const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
+  detail.renderTopDown = () => detail.render();
+  f.listeners.get("pointerdown")({ button: 0, pointerId: 1, clientX: 410, clientY: 320 });
+  for (const [clientX, clientY] of [[440, 350], [380, 290], [440, 290], [380, 350]]) {
+    f.listeners.get("pointermove")({ pointerId: 1, clientX, clientY }); f.frame();
+    assert.deepEqual(detail.frameView.camera, f.view.camera);
+    assert.equal(detail.canvas.style.transform, "translate(0px, 0px) scale(1)", "no translated canvas edge can uncover the backdrop for a frame");
+  }
+});
 
 test("dialog scale animations do not shrink the scene or leave right/bottom gaps after opening", async t => {
   const f = overview(t, { scale: .9 }); f.zoom(4);
