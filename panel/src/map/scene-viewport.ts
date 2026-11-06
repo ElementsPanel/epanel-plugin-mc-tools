@@ -405,10 +405,21 @@ export class SceneViewport implements MapRenderer {
         geometry.setAttribute("aOrigin", new InstancedBufferAttribute(part.origins, 3));
         geometry.setAttribute("aSize", new InstancedBufferAttribute(part.sizes, 2));
         geometry.setAttribute("aFace", new InstancedBufferAttribute(part.faces, 1));
-        geometry.setAttribute("color", new InstancedBufferAttribute(part.colors, 3, true));
-        geometry.setAttribute("aTexture", new InstancedBufferAttribute(part.sprites, 1));
-        geometry.setAttribute("aFlags", new InstancedBufferAttribute(part.flags, 1));
-        geometry.setAttribute("aAO", new InstancedBufferAttribute(part.occlusion, 1));
+        geometry.setAttribute("color", new InstancedBufferAttribute(part.cornerColors[0], 3, true));
+        for (let corner = 1; corner < 4; corner++) geometry.setAttribute("aTint" + corner, new InstancedBufferAttribute(part.cornerColors[corner], 3, true));
+        geometry.setAttribute("aUvU", new InstancedBufferAttribute(part.uvU, 3));
+        geometry.setAttribute("aUvV", new InstancedBufferAttribute(part.uvV, 3));
+        if (part.axes) {
+          geometry.setAttribute("aAxisU", new InstancedBufferAttribute(part.axes[0], 3));
+          geometry.setAttribute("aAxisV", new InstancedBufferAttribute(part.axes[1], 3));
+        }
+        const materialData = new Uint16Array(part.count * 3);
+        for (let i = 0; i < part.count; i++) {
+          materialData[i * 3] = part.sprites[i];
+          materialData[i * 3 + 1] = part.flags[i];
+          materialData[i * 3 + 2] = part.occlusion[i];
+        }
+        geometry.setAttribute("aMaterial", new InstancedBufferAttribute(materialData, 3));
         const halfHeight = (part.maxY - part.minY) / 2;
         geometry.boundingSphere = new Sphere(new Vector3(SIZE / 2, part.minY + halfHeight, SIZE / 2), Math.hypot(SIZE / Math.SQRT2, halfHeight));
         group.add(new Mesh(geometry, this.materials[part.kind]));

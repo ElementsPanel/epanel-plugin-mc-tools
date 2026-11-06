@@ -186,7 +186,6 @@ test("the public map viewer restores shared position, zoom and Y=0, emits update
   assert.deepEqual(views.at(-1), { x: -128, z: 256, zoom: 4, y: 0 });
   f.view.height = -64; await vue.nextTick();
   assert.equal(views.at(-1).y, -64);
-  assert.equal(f.view.pageHref, ""); assert.equal(f.view.settingsHref, "");
   f.close(); assert(signals.every(signal => signal.aborted)); assert.equal(renderers[0].disposed, true);
 });
 

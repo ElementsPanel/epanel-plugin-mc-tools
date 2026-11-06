@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { VBtn, VSelect } from "vuetify/components";
+import { VBtn, VList, VListItem } from "vuetify/components";
 import { t } from "../settings";
 
-defineProps<{ selected: string; items: { title: string; value: string }[]; enabled: boolean; loading: boolean; shareUrl: string }>();
+defineProps<{ selected: string; items: { title: string; value: string }[]; enabled: boolean; loading: boolean }>();
 const emit = defineEmits<{ choose: [value: string]; refresh: [] }>();
 </script>
 
 <template>
   <div class="mc-map-public-picker">
-    <VSelect :model-value="selected" :items="items" :label="t('MC_MAP_PUBLIC_MAPS')" :disabled="loading || !enabled || !items.length" hide-details density="compact" variant="outlined" @update:model-value="emit('choose', $event)" />
-    <VBtn v-if="selected" :href="shareUrl" target="_blank" rel="noopener noreferrer" prepend-icon="mdi-link-variant" variant="text">{{ t("MC_MAP_PUBLIC_LINK") }}</VBtn>
-    <VBtn v-else :loading="loading" variant="text" @click="emit('refresh')">{{ t("MC_MAP_REFRESH") }}</VBtn>
+    <VList nav :aria-label="t('MC_MAP_PUBLIC_MAPS')">
+      <VListItem v-for="item in items" :key="item.value" :title="item.title" :active="selected === item.value" :disabled="loading || !enabled" prepend-icon="mdi-earth" @click="emit('choose', item.value)" />
+    </VList>
+    <VBtn v-if="!selected" :loading="loading" variant="text" @click="emit('refresh')">{{ t("MC_MAP_REFRESH") }}</VBtn>
   </div>
 </template>
 

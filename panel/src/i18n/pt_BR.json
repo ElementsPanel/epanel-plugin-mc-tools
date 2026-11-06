@@ -161,5 +161,8 @@
   "MC_MAP_3D_LOADING": "Carregando a cena 3D…",
   "MC_MAP_3D_EMPTY": "Não há blocos salvos por perto. Escolha outras coordenadas ou volte ao ponto de surgimento.",
   "MC_MAP_WEBGL_UNAVAILABLE": "Este navegador não consegue exibir a cena 3D. Retornamos ao 2D; ative a aceleração de hardware e tente novamente.",
-  "MC_MAP_SCENE_LIMIT": "Esta cena é muito complexa. O terreno próximo tem prioridade; amplie ou mova-se para explorar mais."
+  "MC_MAP_SCENE_LIMIT": "Esta cena é muito complexa. O terreno próximo tem prioridade; amplie ou mova-se para explorar mais.",
+  "MC_MAP_WORLDS_MENU": "Mundos",
+  "MC_MAP_BACK": "Voltar",
+  "MC_MAP_POSITION_SETTINGS": "Posição e camadas"
 }

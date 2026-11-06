@@ -62,7 +62,7 @@ function animatedViewport(t, reduced = false) {
   const original = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   let view;
   t.after(() => { view?.dispose(); for (const key of keys) { if (original[key]) Object.defineProperty(globalThis, key, original[key]); else delete globalThis[key]; } });
-  const frames = new Map(), listeners = new Map(), requests = [], images = [], markers = [], states = [], blends = [];
+  const frames = new Map(), listeners = new Map(), requests = [], images = [], markers = [], states = [], blends = [], captured = new Set();
   const motion = { matches: reduced };
   let now = 0, sequence = 0;
   t.mock.method(performance, "now", () => now);
@@ -85,7 +85,8 @@ function animatedViewport(t, reduced = false) {
   };
   const canvas = {
     style: {}, clientWidth: 512, clientHeight: 256, getBoundingClientRect: () => ({ left: 10, top: 20, width: 512, height: 256 }), getContext: () => context,
-    setPointerCapture() {}, addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name)
+    setPointerCapture: id => captured.add(id), hasPointerCapture: id => captured.has(id), releasePointerCapture: id => captured.delete(id),
+    addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name)
   };
   const { MapViewport, worldPosition } = loader()("panel/src/map/viewport.ts");
   view = new MapViewport(canvas, { id: "world", spawn: { x: 0, z: 0 } }, (world, x, z, signal, y) => {
@@ -93,8 +94,60 @@ function animatedViewport(t, reduced = false) {
   }, (state) => states.push(state));
   const frame = time => { now = time; const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); };
   const wheel = (deltaY, x = 123, y = 90) => listeners.get("wheel")({ preventDefault() {}, clientX: x + 10, clientY: y + 20, deltaY, deltaMode: 0 });
-  return { view, worldPosition, frames, listeners, requests, images, markers, states, blends, motion, frame, wheel };
+  const touch = (type, pointerId, x, y) => listeners.get(type)({ pointerType: "touch", button: 0, pointerId, clientX: x + 10, clientY: y + 20 });
+  return { view, worldPosition, frames, listeners, requests, images, markers, states, blends, motion, frame, wheel, touch, captured, canvas };
 }
+
+test("touch pinch and two-finger pan preserve the midpoint's world position and continue as a single-finger drag", t => {
+  const f = animatedViewport(t); f.frame(0);
+  f.touch("pointerdown", 1, 100, 100); f.touch("pointerdown", 2, 200, 100);
+  const anchor = f.worldPosition(f.view.camera, 512, 256, 150, 100);
+  f.touch("pointermove", 1, 50, 120); f.touch("pointermove", 2, 250, 120); f.frame(16);
+  assert(Math.abs(f.view.camera.zoom - 4) < 1e-9);
+  assert.deepEqual(f.worldPosition(f.view.camera, 512, 256, 150, 120), anchor);
+  f.touch("pointermove", 1, 80, 150); f.touch("pointermove", 2, 280, 150); f.frame(32);
+  assert(Math.abs(f.view.camera.zoom - 4) < 1e-9);
+  const moved = f.worldPosition(f.view.camera, 512, 256, 180, 150);
+  assert(Math.abs(moved.x - anchor.x) < 1e-9 && Math.abs(moved.z - anchor.z) < 1e-9);
+  const before = { ...f.view.camera };
+  f.touch("pointerup", 2, 280, 150);
+  assert.deepEqual([...f.captured], [1]);
+  f.touch("pointermove", 1, 100, 180); f.frame(48);
+  assert.equal(f.view.camera.zoom, before.zoom);
+  assert.equal(f.view.camera.x, before.x - 20 / before.zoom);
+  assert.equal(f.view.camera.z, before.z - 30 / before.zoom);
+  f.touch("pointerup", 1, 100, 180); assert.equal(f.captured.size, 0);
+  assert.equal(f.canvas.style.cursor, "grab");
+});
+
+test("touch zoom clamps limits, handles coincident fingers and ignores extra contacts and cancelled pointers", t => {
+  const f = animatedViewport(t); f.frame(0);
+  f.touch("pointerdown", 1, 100, 100); f.touch("pointerdown", 2, 100, 100);
+  f.touch("pointermove", 2, 110, 100);
+  assert(Object.values(f.view.camera).every(Number.isFinite));
+  f.touch("pointermove", 2, 300, 100); assert.equal(f.view.camera.zoom, 12);
+  f.touch("pointermove", 2, 101, 100); assert.equal(f.view.camera.zoom, 1);
+  const before = { ...f.view.camera };
+  f.touch("pointerdown", 3, 400, 100); f.touch("pointermove", 3, 1000, 100);
+  assert.deepEqual(f.view.camera, before); assert(!f.captured.has(3));
+  f.touch("pointercancel", 2, 101, 100); f.touch("pointermove", 2, 300, 100);
+  assert.deepEqual(f.view.camera, before);
+  f.touch("lostpointercapture", 1, 100, 100); f.touch("pointermove", 1, 200, 100);
+  assert.deepEqual(f.view.camera, before); assert.equal(f.captured.size, 0);
+});
+
+test("touch cancels wheel inertia, releases contacts on mode changes or close, and leaves 3D input to OrbitControls", t => {
+  const f = animatedViewport(t); f.frame(0); f.wheel(-100); f.frame(50);
+  f.touch("pointerdown", 1, 100, 100); f.touch("pointerdown", 2, 200, 100);
+  const before = { ...f.view.camera }; f.frame(500);
+  assert.deepEqual(f.view.camera, before);
+  f.view.setMode("3d"); assert.equal(f.captured.size, 0);
+  f.touch("pointermove", 1, 0, 0); f.touch("pointerdown", 3, 200, 100); f.touch("pointermove", 3, 300, 100);
+  assert.deepEqual(f.view.camera, before); assert.equal(f.captured.size, 0);
+  f.view.setMode("2d");
+  f.touch("pointerdown", 4, 100, 100); f.touch("pointerdown", 5, 200, 100);
+  f.view.dispose(); assert.equal(f.captured.size, 0); assert.equal(f.frames.size, 0); assert.equal(f.listeners.size, 0);
+});
 
 test("map tiles fade from transparent to opaque once per load, leave markers opaque, and stop animation frames when finished", async t => {
   const f = animatedViewport(t);

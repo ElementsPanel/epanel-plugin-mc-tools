@@ -5,7 +5,7 @@ import { VAlert } from "vuetify/components";
 import { MAP_PAGE_PATH, type MapViewOptions, type PublicMapCatalog } from "../../../shared/map";
 import { t } from "../settings";
 import { mapError, publicMapCatalog } from "./api";
-import { mapPageLocation, publicMapUrl } from "./page";
+import { mapPageLocation } from "./page";
 import WorldMapView from "./WorldMapView.vue";
 import MapControls from "./MapControls.vue";
 import PublicMapPicker from "./PublicMapPicker.vue";
@@ -15,13 +15,11 @@ const sidebarOpen = ref(false);
 const catalog = ref<PublicMapCatalog>({ enabled: false, maps: [] });
 const selected = ref("");
 const initialView = shallowRef<MapViewOptions>({});
-const view = shallowRef<MapViewOptions>({});
 const loading = ref(true), error = ref("");
 let abort = new AbortController();
 let generation = 0;
 const items = computed(() => catalog.value.maps.map((map) => ({ title: map.name, value: map.id })));
-const shareUrl = computed(() => selected.value ? publicMapUrl(selected.value, view.value) : "");
-const picker = computed(() => ({ selected: selected.value, items: items.value, enabled: catalog.value.enabled, loading: loading.value, shareUrl: shareUrl.value }));
+const picker = computed(() => ({ selected: selected.value, items: items.value, enabled: catalog.value.enabled, loading: loading.value }));
 
 async function load() {
   const current = ++generation;
@@ -38,7 +36,7 @@ async function load() {
     if (!result.enabled) throw new Error("MC_MAP_PAGE_DISABLED");
     const map = location.map ?? result.maps[0]?.id;
     if (map && !result.maps.some((item) => item.id === map)) throw new Error("MC_MAP_PUBLIC_NOT_FOUND");
-    initialView.value = view.value = location.view;
+    initialView.value = location.view;
     selected.value = map ?? "";
   } catch (reason) {
     if (current === generation && !abort.signal.aborted) error.value = mapError(reason);
@@ -62,7 +60,7 @@ onBeforeUnmount(() => { generation++; abort.abort(); });
         <div v-else class="mc-map-page-empty" role="status">{{ t(loading ? "MC_MAP_LOADING" : "MC_MAP_PUBLIC_EMPTY") }}</div>
       </div>
     </template>
-    <WorldMapView v-else :key="route.fullPath" v-model:sidebar-open="sidebarOpen" :public-map="selected" :initial-view="initialView" fullscreen @view="view = $event">
+    <WorldMapView v-else :key="route.fullPath" v-model:sidebar-open="sidebarOpen" :public-map="selected" :initial-view="initialView" fullscreen>
       <template #settings><PublicMapPicker v-bind="picker" @choose="choose" @refresh="load" /></template>
     </WorldMapView>
   </main>

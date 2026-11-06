@@ -22,7 +22,7 @@ test("tile edges coincide without gaps or overlaps at fractional zoom, DPR and n
 function overview(t, options = {}) {
   const globals = ["ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame", "devicePixelRatio", "matchMedia", "Image"];
   const originals = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-  const frames = new Map(), imports = [], renderers = [], requests = [], draws = [], states = [], layers = [], observers = [], listeners = new Map();
+  const frames = new Map(), imports = [], renderers = [], requests = [], draws = [], states = [], layers = [], observers = [], listeners = new Map(), captured = new Set();
   const bounds = { width: 800, height: 600, scale: options.scale ?? 1 };
   let sequence = 0, now = 0;
   const motion = { matches: true };
@@ -86,7 +86,8 @@ function overview(t, options = {}) {
     before(...elements) { layers.splice(layers.indexOf(this), 0, ...elements); },
     get clientWidth() { return Math.round(bounds.width); }, get clientHeight() { return Math.round(bounds.height); },
     getBoundingClientRect: () => ({ left: 10, top: 20, width: bounds.width * bounds.scale, height: bounds.height * bounds.scale }), getContext: () => foreground,
-    addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); }, setPointerCapture() {}
+    addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); },
+    setPointerCapture: id => captured.add(id), hasPointerCapture: id => captured.has(id), releasePointerCapture: id => captured.delete(id)
   };
   layers.push(canvas);
   const loadScene = () => assert.fail("scene API must be passed through to the scene renderer");
@@ -137,15 +138,61 @@ test("zoomed-in detail waits for visible geometry, fades over the backdrop, and 
   detail.render({ loading: 2 }); f.frame(1300);
   assert.equal(detail.canvas.style.opacity, "1");
   f.view.camera.zoom = 2; f.view.center(10, -14); f.frame(1400);
-  assert.equal(detail.canvas.style.opacity, "0");
-  f.view.camera.zoom = 4; detail.render(); f.view.center(10, -14); f.frame(1500);
-  assert(Number(detail.canvas.style.opacity) < 1, "returning to a cached scene fades it in again");
-  f.motion.matches = true; f.frame(1516);
   assert.equal(detail.canvas.style.opacity, "1");
-  f.frame(1532); assert.equal(f.frames.size, 0);
-  f.motion.matches = false; f.view.camera.zoom = 2; f.view.center(10, -14); f.frame(1600);
-  f.view.camera.zoom = 4; f.view.center(10, -14); f.frame(1616);
+  f.frame(1640);
+  assert.equal(detail.canvas.style.opacity, "0");
+  f.view.camera.zoom = 4; detail.render(); f.view.center(10, -14); f.frame(1700);
+  assert(Number(detail.canvas.style.opacity) < 1, "returning to a cached scene fades it in again");
+  f.motion.matches = true; f.frame(1716);
+  assert.equal(detail.canvas.style.opacity, "1");
+  f.frame(1732); assert.equal(f.frames.size, 0);
+  f.motion.matches = false; f.view.camera.zoom = 2; f.view.center(10, -14); f.frame(1800);
+  f.view.camera.zoom = 4; f.view.center(10, -14); f.frame(1816);
   assert(f.frames.size > 0); f.view.dispose(); assert.equal(f.frames.size, 0);
+});
+
+test("detail fades out while following zoom and drag, reverses smoothly, and pauses only after disappearing", async t => {
+  const f = overview(t); f.zoom(4);
+  const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
+  f.motion.matches = false;
+  detail.renderTopDown = () => detail.render();
+  f.view.camera.zoom = 3.5; f.view.center(10, -14); f.frame(100);
+  assert.equal(detail.canvas.style.opacity, "1"); assert.equal(detail.active, true);
+  f.frame(180);
+  const fading = Number(detail.canvas.style.opacity);
+  assert(fading > 0 && fading < 1); assert.equal(detail.canvas.style.visibility, "visible");
+  f.view.center(20, 30); f.frame(200);
+  assert.deepEqual(detail.frameView.camera, f.view.camera);
+  assert.equal(detail.canvas.style.transform, "translate(0px, 0px) scale(1)");
+  const beforeReverse = Number(detail.canvas.style.opacity);
+  f.view.camera.zoom = 4.5; f.view.center(20, 30); f.frame(200);
+  assert.equal(Number(detail.canvas.style.opacity), beforeReverse, "reversing starts at the current opacity");
+  f.frame(220); assert(Number(detail.canvas.style.opacity) > beforeReverse);
+  const beforeSecondReverse = Number(detail.canvas.style.opacity);
+  f.view.camera.zoom = 3.5; f.view.center(20, 30); f.frame(220);
+  assert.equal(Number(detail.canvas.style.opacity), beforeSecondReverse);
+  f.frame(240); assert(Number(detail.canvas.style.opacity) < beforeSecondReverse);
+  f.frame(500); f.frame(516);
+  assert.equal(detail.canvas.style.opacity, "0"); assert.equal(detail.canvas.style.visibility, "hidden");
+  assert.equal(detail.active, false); assert.equal(detail.disposed, false);
+  assert.equal(f.frames.size, 0); assert.equal(f.renderers.length, 1);
+});
+
+test("a stale slice or failed context cannot remain visible during a fade-out", async t => {
+  const f = overview(t); f.zoom(4);
+  const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
+  f.motion.matches = false;
+  f.view.camera.zoom = 3.5; f.view.center(0, 0); f.frame(0); f.frame(80);
+  assert(Number(detail.canvas.style.opacity) > 0);
+  f.view.setLayer(-64); f.frame(96);
+  assert.equal(detail.canvas.style.visibility, "hidden"); assert.equal(detail.canvas.style.opacity, "0");
+  f.frame(112); assert.equal(detail.active, false);
+  f.view.camera.zoom = 4; f.view.center(0, 0); detail.render(); f.frame(128); f.frame(368);
+  assert.equal(detail.canvas.style.opacity, "1");
+  f.view.camera.zoom = 3.5; f.view.center(0, 0); f.frame(384);
+  detail.render({ error: new Error("MC_MAP_WEBGL_UNAVAILABLE") }); f.frame(400);
+  assert.equal(detail.disposed, true); assert.deepEqual(f.layers, [f.canvas]);
+  assert.equal(f.frames.size, 0);
 });
 
 test("dragging refreshes the full detail canvas before compositing the moved 2D map", async t => {
@@ -201,6 +248,23 @@ test("zoom anchors and drag distances use layout coordinates while an ancestor i
   f.listeners.get("pointermove")({ pointerId: 1, clientX: 118, clientY: 137 }); f.frame();
   assert(Math.abs(f.view.camera.x - (before.x - 20 / before.zoom)) < 1e-8);
   assert(Math.abs(f.view.camera.z - (before.z - 30 / before.zoom)) < 1e-8);
+});
+
+test("two-finger zoom uses layout coordinates under dialog scaling and updates the detail scene in the same frame", async t => {
+  const f = overview(t, { scale: .9 }); f.zoom(4);
+  const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
+  detail.renderTopDown = () => detail.render();
+  const { worldPosition } = loader()("panel/src/map/viewport.ts");
+  const touch = (type, pointerId, x, y) => f.listeners.get(type)({ pointerType: "touch", button: 0, pointerId,
+    clientX: 10 + x * f.bounds.scale, clientY: 20 + y * f.bounds.scale });
+  touch("pointerdown", 1, 100, 100); touch("pointerdown", 2, 300, 100);
+  const anchor = worldPosition(f.view.camera, 800, 600, 200, 100);
+  touch("pointermove", 1, 50, 150); touch("pointermove", 2, 450, 150); f.frame();
+  assert(Math.abs(f.view.camera.zoom - 8) < 1e-8);
+  const after = worldPosition(f.view.camera, 800, 600, 250, 150);
+  assert(Math.abs(after.x - anchor.x) < 1e-8 && Math.abs(after.z - anchor.z) < 1e-8);
+  assert.deepEqual(detail.frameView.camera, f.view.camera);
+  assert.equal(detail.canvas.style.transform, "translate(0px, 0px) scale(1)");
 });
 
 test("2D overview loads a real orthographic scene only at 4x, keeps its color backdrop while loading, and draws markers last", async t => {

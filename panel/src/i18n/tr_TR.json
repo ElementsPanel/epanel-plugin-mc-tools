@@ -161,5 +161,8 @@
   "MC_MAP_3D_LOADING": "3D sahne yükleniyor…",
   "MC_MAP_3D_EMPTY": "Yakında kayıtlı blok yok. Başka koordinatlar seçin veya doğma noktasına dönün.",
   "MC_MAP_WEBGL_UNAVAILABLE": "Bu tarayıcı 3D sahneyi gösteremediği için 2D’ye dönüldü. Donanım hızlandırmayı açıp yeniden deneyin.",
-  "MC_MAP_SCENE_LIMIT": "Bu sahne çok karmaşık. Yakındaki araziye öncelik verilir; daha fazlasını keşfetmek için yakınlaştırın veya kaydırın."
+  "MC_MAP_SCENE_LIMIT": "Bu sahne çok karmaşık. Yakındaki araziye öncelik verilir; daha fazlasını keşfetmek için yakınlaştırın veya kaydırın.",
+  "MC_MAP_WORLDS_MENU": "Dünyalar",
+  "MC_MAP_BACK": "Geri",
+  "MC_MAP_POSITION_SETTINGS": "Konum ve katmanlar"
 }

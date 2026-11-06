@@ -21,11 +21,14 @@ function quads(tile) {
 test("voxel meshes merge solid terrain, cull chunk seams and provide compact instances for every face", async () => {
   const result = await tile([chunk([layer(4, "grass_block")]), chunk([layer(4, "grass_block")], 1)]);
   const decoded = decodeScene(result);
-  assert.equal(decoded.count, 6);
+  const faces = quads(result);
+  assert.equal(faces.reduce((area, q) => area + q.w * q.h, 0), 2 * (32 * 16 + 32 * 16 + 16 * 16));
+  assert(faces.some(q => q.w >= 16 && q.h >= 16), "uniformly shaded terrain still merges into large faces");
+  assert(!faces.some(q => q.face < 2 && q.x === 16), "no internal chunk seam");
   assert.equal(decoded.heights[0], 79); assert.equal(decoded.heights[31], 79);
   assert.equal(decoded.heights[32 * 16], -32768);
   assert.equal(result.limited, false);
-  assert.deepEqual(quads(result).map(q => q.face).sort(), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual([...new Set(faces.map(q => q.face))].sort(), [0, 1, 2, 3, 4, 5]);
   assert.equal(Math.min(...decoded.meshes.map(part => part.minY)), 64);
   assert.equal(Math.max(...decoded.meshes.map(part => part.maxY)), 80);
   for (const part of decoded.meshes) {
@@ -41,9 +44,10 @@ test("3D geometry retains hidden cavities and overhangs even when their 2D surfa
   const solid = layer(0, (x, y, z) => x >= 1 && x <= 3 && y >= 1 && y <= 3 && z >= 1 && z <= 3 ? "stone" : "air");
   const hollow = layer(0, (x, y, z) => x === 2 && y === 2 && z === 2 ? "air" : solid.block(y * 256 + z * 16 + x));
   assert.deepEqual(surfaceFromLayers([solid]), surfaceFromLayers([hollow]));
-  assert.equal(decodeScene(await tile([chunk([solid])])).count, 6);
+  const area = result => quads(result).reduce((total, q) => total + q.w * q.h, 0);
+  assert.equal(area(await tile([chunk([solid])])), 54);
   const result = await tile([chunk([hollow])]);
-  assert.equal(decodeScene(result).count, 12);
+  assert.equal(area(result), 60);
   assert(quads(result).some(q => q.face === 3 && q.y === 3 && q.x === 2 && q.z === 2), "cavity ceiling has a visible underside");
 });
 
@@ -169,20 +173,91 @@ test("26.3 dappled forest uses its own grass, foliage and water colors through N
   }
 });
 
-test("26.3 biome borders keep distinct grass and water tints instead of merging them with plains", async () => {
+test("grass and foliage transition across biome borders while preserving interior colors and untinted faces", async () => {
   const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
   let packed = 0n;
   for (let i = 0; i < 64; i++) if ((i & 3) >= 2) packed |= 1n << BigInt(i);
-  for (const [block, first, second] of [["grass_block", 0xdf6827, 0x91bd59], ["water", 0x375154, 0x3f76e4]]) {
+  for (const [block, first, second] of [["grass_block", 0xdf6827, 0x91bd59],
+    ["oak_leaves", minecraftAssets.biomes["minecraft:dappled_forest"][1], minecraftAssets.biomes["minecraft:plains"][1]],
+    ["water", 0x375154, 0x3f76e4]]) {
     const layers = chunkLayers({ DataVersion: 5023, sections: [{ Y: 0,
       block_states: { palette: ["minecraft:" + block] },
       biomes: { palette: ["minecraft:dappled_forest", "minecraft:plains"], data: [packed] }
     }] });
     const faces = quads(await tile([chunk(layers)], false, 0));
     const tops = faces.filter(face => face.face === 2);
-    assert(tops.some(face => face.x === 0 && face.tint === first));
-    assert(tops.some(face => face.x === 8 && face.tint === second));
+    const color = x => tops.find(face => x >= face.x && x < face.x + face.h && face.z <= 7 && face.z + face.w > 7).tint;
+    assert.equal(color(0), first); assert.equal(color(15), second);
+    if (block !== "water") {
+      assert.equal(new Set(Array.from({ length: 8 }, (_, i) => color(i + 4))).size, 8, "the transition has intermediate colors, not a hard boundary");
+      for (let x = 5; x <= 10; x++) for (const shift of [16, 8, 0]) {
+        const a = (first >> shift) & 255, b = (second >> shift) & 255;
+        const before = (color(x - 1) >> shift) & 255, now = (color(x) >> shift) & 255;
+        assert(now >= Math.min(a, b) && now <= Math.max(a, b));
+        assert(b > a ? now >= before : now <= before, "each color channel changes monotonically");
+      }
+    } else { assert.equal(color(7), first); assert.equal(color(8), second); }
+    if (block === "grass_block") {
+      assert(faces.filter(face => face.face === 3).every(face => face.tint === 0xffffff), "the dirt underside is not biome tinted");
+      assert(faces.filter(face => face.face === 4).some(face => face.tint !== first && face.tint !== second && face.flags & SCENE_GRASS_OVERLAY), "the grass side overlay also blends");
+    }
     assert(!faces.some(face => face.face < 2 && face.x === 8), "a tint change does not create a wall");
+  }
+});
+
+test("biome blending crosses adjoining scene tiles at negative coordinates without a color seam", async () => {
+  const mix = (a, b, count) => [16, 8, 0].reduce((color, shift) => color | (Math.round((((a >> shift) & 255) * (7 - count) + ((b >> shift) & 255) * count) / 7) << shift), 0);
+  const first = minecraftAssets.biomes["minecraft:dappled_forest"][0], second = minecraftAssets.biomes["minecraft:plains"][0];
+  for (const origin of [-2, 0]) {
+    const owned = [], neighbors = [];
+    for (let z = -1; z <= 2; z++) for (let x = origin - 1; x <= origin + 2; x++) {
+      const blocks = { ...layer(-1, "grass_block"), biome: () => x < 0 ? "minecraft:dappled_forest" : "minecraft:plains" };
+      const entry = chunk([blocks], x - origin, z);
+      (entry.x >= 0 && entry.x < 2 && z >= 0 && z < 2 ? owned : neighbors).push(entry);
+    }
+    const result = await tile(owned, false, -1, neighbors), tops = quads(result).filter(face => face.face === 2);
+    for (let x = 0; x < 32; x++) {
+      const worldX = x + origin * 16;
+      const face = tops.find(face => x >= face.x && x < face.x + face.h && face.z <= 16 && face.z + face.w > 16);
+      assert.equal(face.tint, mix(first, second, Math.max(0, Math.min(7, worldX + 4))), "world X=" + worldX);
+    }
+    assert(!result.limited);
+    assert(!quads(result).some(face => face.face < 2 && face.x === (origin < 0 ? 32 : 0)), "the shared terrain edge stays culled");
+  }
+});
+
+test("air-section biomes blend neighboring treetops without creating terrain or a plains-colored unloaded rim", async () => {
+  const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
+  const section = (Y, block, biome) => ({ Y, block_states: { palette: ["minecraft:" + block] }, biomes: { palette: ["minecraft:" + biome] } });
+  const own = chunkLayers({ DataVersion: 5023, sections: [section(-1, "oak_leaves", "dappled_forest"), section(50, "air", "plains")] }, undefined, true);
+  const air = { DataVersion: 5023, sections: [section(-1, "air", "plains")] };
+  assert.equal(chunkLayers(air).length, 0, "ordinary surface extraction still skips air sections");
+  const adjacent = chunkLayers(air, undefined, true);
+  assert.equal(adjacent[0].empty, true); assert.equal(adjacent[0].biome(123), "minecraft:plains");
+  const result = await tile([chunk(own)], false, undefined, [chunk(adjacent, 1)]);
+  const faces = quads(result), tops = faces.filter(face => face.face === 2);
+  const first = minecraftAssets.biomes["minecraft:dappled_forest"][1], second = minecraftAssets.biomes["minecraft:plains"][1];
+  assert(tops.some(face => face.x === 0 && face.tint === first), "missing western chunks do not change the biome's own color");
+  assert(tops.some(face => face.x === 15 && face.tint !== first && face.tint !== second), "eastern air provides real neighboring biome colors");
+  assert(faces.every(face => face.y <= 0 && face.x <= 16 && face.z <= 16));
+  assert.equal(Math.max(...decodeScene(result).meshes.map(mesh => mesh.maxY)), 0);
+});
+
+test("biome tint neighborhoods include both horizontal axes and keep each elevation's palette", () => {
+  const { biomeBlend } = load("daemon/src/backend/map/biome-blend.ts");
+  const names = ["minecraft:dappled_forest", "minecraft:plains", "minecraft:swamp", "minecraft:desert"];
+  const chunks = [];
+  for (let z = -1; z <= 2; z++) for (let x = -1; x <= 2; x++) {
+    const biome = names[(z < 0 ? 0 : 2) + (x < 0 ? 0 : 1)];
+    chunks.push(chunk([{ ...layer(0, "air"), empty: true, biome: index => index >> 8 < 8 ? biome : names[3] }], x, z));
+  }
+  const blend = biomeBlend(chunks);
+  for (const tint of [0, 1, 3]) {
+    const weights = [9, 12, 12, 16]; // 3×3, 4×3, 3×4 and 4×4 blocks around the corner.
+    const expected = [16, 8, 0].reduce((rgb, shift) => rgb | (Math.round(names.reduce((sum, name, i) =>
+      sum + ((minecraftAssets.biomes[name][tint] >> shift) & 255) * weights[i], 0) / 49) << shift), 0);
+    assert.equal(blend(0, 3, 0, tint), expected);
+    assert.equal(blend(0, 8, 0, tint), minecraftAssets.biomes[names[3]][tint]);
   }
 });
 
@@ -209,6 +284,80 @@ test("leaf litter lies above the visible ground with Java dry-foliage tint, and 
   assert.equal(decodeScene(result).count, faces.length);
 });
 
+test("pink petals and wildflowers lie on their supporting block like litter without raising a cube or hiding the ground", async () => {
+  for (const name of ["pink_petals", "wildflowers", "leaf_litter"]) for (const sectionY of [-1, 0, 4]) {
+    const blocks = layer(sectionY, (x, y, z) => x === 1 && z === 1 ? y === 0 ? "grass_block" : y === 1 ? name : "air" : "air");
+    blocks.biome = () => "minecraft:dappled_forest";
+    const baseY = sectionY * 16 + 1;
+    const result = await tile([chunk([blocks])]), faces = quads(result);
+    const plants = faces.filter(face => sceneTextures.get(face.texture)[0].startsWith("block/" + name));
+    assert.equal(plants.length, 1, `${name} must not produce cube walls or crossed stems`);
+    const [plant] = plants;
+    assert.equal(plant.face, 2); assert.equal(plant.kind, SceneKind.Plant);
+    assert.equal(plant.y, baseY, "petals sit at the bottom of their block, not a full block above the ground");
+    assert.equal(plant.w, 1); assert.equal(plant.h, 1); assert(plant.flags & SCENE_GROUND);
+    assert.equal(plant.tint, name === "leaf_litter" ? minecraftAssets.biomes["minecraft:dappled_forest"][3] : 0xffffff,
+      "flower colors come from the petal texture; only litter receives dry-foliage tint");
+    assert(faces.some(face => face.face === 2 && face.y === baseY && face.kind === SceneKind.Opaque), "transparent petal pixels reveal the supporting grass");
+    const mesh = decodeScene(result).meshes.find(part => part.kind === SceneKind.Plant);
+    assert.equal(mesh.minY, baseY); assert.equal(mesh.maxY, baseY + 1 / 64, "the only height offset is the existing anti-z-fighting offset");
+    const cut = quads(await tile([chunk([blocks])], false, baseY - 1));
+    assert(cut.every(face => face.kind !== SceneKind.Plant), "a cut below the decoration excludes it");
+    const atPlant = quads(await tile([chunk([blocks])], false, baseY));
+    assert(atPlant.some(face => face.face === 2 && face.y === baseY && face.flags & SCENE_GROUND));
+  }
+});
+
+test("ground-cover classification also works with an older asset catalog", () => {
+  const scene = load("shared/scene.ts"), blocks = { ...minecraftAssets.blocks };
+  for (const name of ["pink_petals", "wildflowers"]) {
+    blocks[name] = { ...blocks[name] }; delete blocks[name].shape;
+  }
+  const { blockMaterial } = loader({ "../../../../shared/scene": { ...scene, minecraftAssets: { ...minecraftAssets, blocks } } })("daemon/src/backend/map/materials.ts");
+  for (const name of ["pink_petals", "wildflowers"]) {
+    const material = blockMaterial("minecraft:" + name);
+    assert.equal(material.kind, SceneKind.Plant); assert.equal(material.model.shape, "ground");
+    assert.equal(blocks[name].shape, undefined, "runtime classification does not mutate the imported catalog");
+  }
+});
+
+test("old daemon flower cubes decode at ground level in 3D, including merged petals and negative heights", async () => {
+  const materials = load("daemon/src/backend/map/materials.ts");
+  const legacyMesh = loader({ "./materials": { ...materials, blockMaterial(...args) {
+    const material = materials.blockMaterial(...args);
+    return ["pink_petals", "wildflowers"].includes(material.name)
+      ? { ...material, model: { ...material.model, shape: undefined }, kind: SceneKind.Cutout } : material;
+  } } })("daemon/src/backend/map/scene.ts").meshScene;
+  for (const name of ["pink_petals", "wildflowers"]) for (const sectionY of [-1, 0, 4]) {
+    const blocks = layer(sectionY, (x, y, z) => {
+      if (z !== 1) return "air";
+      if ((x === 1 || x === 2) && y === 0) return "grass_block";
+      if ((x === 1 || x === 2) && y === 1) return name;
+      return x === 4 && y === 1 ? "leaf_litter" : "air";
+    });
+    const old = { ...await legacyMesh([chunk([blocks])]), chunks: 1, warnings: 0 };
+    const encoded = old.quads, baseY = sectionY * 16 + 1;
+    const legacyFaces = quads(old).filter(face => sceneTextures.get(face.texture)[0].startsWith("block/" + name));
+    assert(legacyFaces.some(face => face.face === 2 && face.y === baseY + 1), "fixture reproduces the floating top face from an old daemon");
+    const decoded = decodeScene(old), plants = decoded.meshes.find(mesh => mesh.kind === SceneKind.Plant);
+    const petals = Array.from({ length: plants.count }, (_, i) => i).filter(i => sceneTextures.get(plants.sprites[i])[0] === "block/" + name);
+    assert.equal(petals.length, 1, "the merged flowerbed remains one quad");
+    for (const i of petals) {
+      assert.equal(plants.origins[i * 3 + 1], baseY);
+      assert.equal(plants.faces[i], 2); assert(plants.flags[i] & SCENE_GROUND);
+      assert.equal(plants.sizes[i * 2] * plants.sizes[i * 2 + 1], 2);
+      assert.deepEqual([...plants.colors.slice(i * 3, i * 3 + 3)], [255, 255, 255]);
+    }
+    assert.equal(plants.maxY, baseY + 1 / 64);
+    assert(decoded.meshes.every(mesh => [...mesh.sprites].every(sprite => !sceneTextures.get(sprite)[0].endsWith(name + "_stem"))), "full-height stem walls are removed");
+    assert.equal(decoded.count, decoded.meshes.reduce((count, mesh) => count + mesh.count, 0));
+    assert(decoded.count < quads(old).length); assert.equal(old.quads, encoded);
+    const current = decodeScene(await tile([chunk([blocks])]));
+    assert.deepEqual(decoded.heights, current.heights);
+    assert.equal(current.meshes.find(mesh => mesh.kind === SceneKind.Plant).maxY, plants.maxY);
+  }
+});
+
 test("small ferns stay crossed and Java palette properties select distinct upper and lower large-fern textures", async () => {
   const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
   for (const [id, properties] of [["Name", "Properties"], ["id", "properties"]]) {
@@ -225,6 +374,47 @@ test("small ferns stay crossed and Java palette properties select distinct upper
     assert.deepEqual(faces.filter(q => q.x === 1).map(q => q.face), [6, 7]);
     assert(faces.every(q => q.kind === SceneKind.Plant && q.tint === minecraftAssets.biomes["minecraft:forest"][0]));
   }
+});
+
+test("saved block states choose lit, grown, upper-half and directional textures without merging distinct states", async () => {
+  const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
+  const examples = [
+    ["furnace", { facing: "east", lit: "true" }, 0, "furnace_front_on"],
+    ["furnace", { facing: "east", lit: "false" }, 0, "furnace_front"],
+    ["wheat", { age: "7" }, 6, "wheat_stage7"],
+    ["wheat", { age: "0" }, 6, "wheat_stage0"],
+    ["oak_door", { half: "upper", facing: "north", hinge: "left", open: "false" }, undefined, "oak_door_top"],
+    ["red_bed", { facing: "north", part: "head" }, 2, "red_bed_head_up"],
+    ["copper_bulb", { lit: "true", powered: "false" }, 2, "copper_bulb_lit"],
+    ["poplar_log", { axis: "x" }, 0, "poplar_log_top"]
+  ];
+  const palette = ["minecraft:air", ...examples.map(([name, Properties]) => ({ Name: "minecraft:" + name, Properties }))];
+  const data = Array(256).fill(0n);
+  examples.forEach((_, i) => { data[0] |= BigInt(i + 1) << BigInt(i * 8); });
+  const layers = chunkLayers({ DataVersion: 5023, sections: [{ Y: 0, block_states: { palette, data } }] });
+  const result = await tile([chunk(layers)]), faces = quads(result);
+  examples.forEach(([name, , face, texture], i) => {
+    assert(faces.some(q => q.x === i * 2 + (face === 0 ? 1 : 0) && (face === undefined || q.face === face) &&
+      sceneTextures.get(q.texture)[0] === "block/" + texture), name + " uses " + texture);
+  });
+  assert.equal(decodeScene(result).count, faces.length);
+});
+
+test("the complete asset catalog has no missing visible faces, including heavy core and 26.3 forest blocks", async () => {
+  for (const [name, model] of Object.entries(minecraftAssets.blocks)) {
+    if (["air", "cave_air", "void_air"].includes(name)) continue;
+    assert(model.faces.every(sprite => sprite !== 0 && sceneTextures.has(sprite)), name);
+  }
+  for (const [name, state] of Object.entries(minecraftAssets.states)) for (const model of state.models) {
+    assert(model.faces.every(sprite => sprite !== 0 && sceneTextures.has(sprite)), name);
+  }
+  const names = ["heavy_core", "orange_poplar_leaves", "red_poplar_leaves", "yellow_poplar_leaves", "poplar_log", "red_shrub", "shelf_mushroom"];
+  const faces = quads(await tile([chunk([layer(0, (x, y, z) => y === 0 && z === 0 && x % 2 === 0 ? names[x / 2] ?? "air" : "air")])]));
+  for (const name of names) assert(faces.some(q => sceneTextures.get(q.texture)[0].startsWith("block/" + name)), name);
+  assert(faces.filter(q => sceneTextures.get(q.texture)[0].includes("poplar_leaves")).every(q => q.kind === SceneKind.Cutout && q.tint === 0xffffff));
+  assert.deepEqual(faces.filter(q => sceneTextures.get(q.texture)[0] === "block/red_shrub").map(q => q.face), [6, 7]);
+  const { blockStateKey } = load("daemon/src/backend/map/materials.ts");
+  assert.equal(blockStateKey("oak_leaves", { distance: "1" }), blockStateKey("oak_leaves", { distance: "7" }), "irrelevant states still merge");
 });
 
 test("cherry, pale oak and azalea leaves keep their texture colors while registered foliage uses biome tint", async () => {

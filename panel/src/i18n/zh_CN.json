@@ -161,5 +161,8 @@
   "MC_MAP_3D_LOADING": "正在加载 3D 场景…",
   "MC_MAP_3D_EMPTY": "附近没有已保存的方块，可更换坐标或返回出生点。",
   "MC_MAP_WEBGL_UNAVAILABLE": "当前浏览器无法运行 3D 场景，已切回 2D 地图。请启用硬件加速后重试。",
-  "MC_MAP_SCENE_LIMIT": "场景过于复杂，已优先显示附近地形。可放大或移动后继续查看。"
+  "MC_MAP_SCENE_LIMIT": "场景过于复杂，已优先显示附近地形。可放大或移动后继续查看。",
+  "MC_MAP_WORLDS_MENU": "世界",
+  "MC_MAP_BACK": "返回",
+  "MC_MAP_POSITION_SETTINGS": "定位与切面"
 }

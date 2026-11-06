@@ -1,11 +1,15 @@
 {
   "minecraftVersion": "26.2",
   "jarSha256": "40896ee9f1e2bec3c934daac7e93d41e9e3d9c2f8ae0ca366d52ffbfd1afa290",
-  "atlasSha256": "3574b3a486c763e34709a0bc187ec8aca4b7cdf9c79b0a779e4837f5b2826685",
-  "textures": 932,
-  "frames": 1302,
-  "blocks": 1198,
+  "atlasSha256": "b7d143e3b4d8cd257d36b55536c882c00ee2366e41e3b8c999ce1762461e4369",
+  "textures": 1318,
+  "frames": 1895,
+  "blocks": 1288,
   "variants": 8,
   "biomeVersion": "26.3",
-  "biomeJarSha256": "d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64"
+  "biomeJarSha256": "d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64",
+  "supplementVersion": "26.3",
+  "supplementJarSha256": "4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d",
+  "supplementBlocks": 90,
+  "stateModels": 858
 }

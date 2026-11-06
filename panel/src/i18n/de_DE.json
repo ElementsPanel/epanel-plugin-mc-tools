@@ -161,5 +161,8 @@
   "MC_MAP_3D_LOADING": "3D-Szene wird geladen…",
   "MC_MAP_3D_EMPTY": "Keine gespeicherten Blöcke in der Nähe. Andere Koordinaten wählen oder zum Spawn zurückkehren.",
   "MC_MAP_WEBGL_UNAVAILABLE": "Dieser Browser kann die 3D-Szene nicht darstellen. Zurück zu 2D; Hardwarebeschleunigung aktivieren und erneut versuchen.",
-  "MC_MAP_SCENE_LIMIT": "Diese Szene ist sehr komplex. Nahes Gelände hat Vorrang; zum Erkunden näher heranzoomen oder verschieben."
+  "MC_MAP_SCENE_LIMIT": "Diese Szene ist sehr komplex. Nahes Gelände hat Vorrang; zum Erkunden näher heranzoomen oder verschieben.",
+  "MC_MAP_WORLDS_MENU": "Welten",
+  "MC_MAP_BACK": "Zurück",
+  "MC_MAP_POSITION_SETTINGS": "Position und Ebenen"
 }

@@ -37,16 +37,16 @@ test("transparent instance faces reorder with the view direction while keeping e
   attribute("aOrigin", new Float32Array([0, 0, -1, 0, 0, -10]), 3);
   attribute("aSize", new Float32Array([1, 1, 1, 1]), 2);
   attribute("aFace", new Uint8Array([4, 4]), 1);
-  attribute("aTexture", new Uint16Array([111, 222]), 1);
+  attribute("aMaterial", new Uint16Array([111, 2, 70, 222, 2, 140]), 3);
   attribute("color", new Uint8Array([255, 0, 0, 0, 0, 255]), 3);
   sortTransparentFaces(geometry, new three.Matrix4());
-  assert.deepEqual([...geometry.getAttribute("aTexture").array], [222, 111]);
+  assert.deepEqual([...geometry.getAttribute("aMaterial").array], [222, 2, 140, 111, 2, 70]);
   assert.deepEqual([...geometry.getAttribute("color").array], [0, 0, 255, 255, 0, 0]);
-  const version = geometry.getAttribute("aTexture").version;
+  const version = geometry.getAttribute("aMaterial").version;
   sortTransparentFaces(geometry, new three.Matrix4());
-  assert.equal(geometry.getAttribute("aTexture").version, version);
+  assert.equal(geometry.getAttribute("aMaterial").version, version);
   sortTransparentFaces(geometry, new three.Matrix4().makeRotationY(Math.PI));
-  assert.deepEqual([...geometry.getAttribute("aTexture").array], [111, 222]);
+  assert.deepEqual([...geometry.getAttribute("aMaterial").array], [111, 2, 70, 222, 2, 140]);
   geometry.dispose();
 });
 
@@ -90,6 +90,7 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
     render(scene, camera) { rendered.push({ scene, camera: camera.clone(), matrix: camera.projectionMatrix.clone(), position: camera.position.clone() }); }
   };
   const uniforms = { uAtlas: { value: { dispose() {} } }, uAnimation: { value: { dispose() {} } },
+    uFogColor: { value: new three.Color() },
     uCut: { value: 4096 }, uFloor: { value: -4096 }, uTime: { value: 0 }, uFogNear: { value: 96 }, uFogFar: { value: 220 } };
   const { SceneViewport, visibleTopDownTiles } = loader({ three: { ...three, WebGLRenderer: renderer },
     "three/addons/controls/OrbitControls.js": { OrbitControls: actualControls ? require("three/addons/controls/OrbitControls.js").OrbitControls : controls },
@@ -105,7 +106,7 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
     const request = { world, x, z, signal, y }; requests.push(request);
     const result = { version: 1, heights: heights.toString("base64"), quads: quad.toString("base64"), chunks: 1, warnings: 0, limited: false };
     return options.load ? options.load(request, result) : result;
-  }, state => states.push(state), undefined, topDown ? "orthographic" : "perspective");
+  }, state => states.push(state), undefined, topDown ? "orthographic" : "perspective", canvas);
   view.camera.zoom = initial.zoom; view.center(initial.x, initial.z);
   const frame = time => {
     now = time;

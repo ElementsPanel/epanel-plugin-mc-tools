@@ -70,7 +70,12 @@ export interface MapSceneTile {
   // Each 16-byte quad: x:u8, z:u8, y:i16le, width:u16le, height:u16le,
   // face:u8 (+X,-X,+Y,-Y,+Z,-Z,cross A,cross B), flags:u8, atlas sprite:u16le,
   // biome tint RGB:u8[3], four corner occlusion values packed as u2[4].
+  // Fire model markers use the occlusion byte for north/east/south/west/up attachment bits.
   quads: string;
+  // Optional 12 bytes per quad: four RGB corners in order 00,10,11,01.
+  tints?: string;
+  // Legacy cached format: four (RGB, skylight, blocklight) corners. Only RGB is used.
+  shading?: string;
   // 32 × 32 surface heights, signed i16le; -32768 denotes an empty column.
   heights: string;
   chunks: number;

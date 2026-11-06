@@ -42,7 +42,7 @@ export function blockProperties(value: unknown): Readonly<Record<string, string>
   if (entries.length) return Object.fromEntries(entries.map(([key, value]) => [key, String(value)]));
 }
 
-export function chunkLayers(nbt: any, sliceY?: number): BlockLayer[] {
+export function chunkLayers(nbt: any, sliceY?: number, retainBiomes = false): BlockLayer[] {
   const chunk = nbt.Level ?? nbt;
   const sections = chunk.sections ?? chunk.Sections;
   if (!Array.isArray(sections)) throw new Error("MC_MAP_CORRUPT");
@@ -64,7 +64,10 @@ export function chunkLayers(nbt: any, sliceY?: number): BlockLayer[] {
       if (palette.length > 4096) throw new Error("MC_MAP_CORRUPT");
       const names = palette.map(blockStateName);
       const properties = palette.map((state: any) => blockProperties(state?.Properties ?? state?.properties));
-      if (names.every(isAir)) return undefined;
+      if (names.every(isAir)) {
+        // Air sections still carry the biome colors needed by neighboring treetops.
+        return retainBiomes && biome ? { y, biome, empty: true, block: () => "minecraft:air" } : undefined;
+      }
       const read = paletteReader(section.block_states?.data ?? section.BlockStates, names.length, version);
       return { y, biome, block: (index: number) => names[read(index)] ?? "minecraft:air", properties: (index: number) => properties[read(index)] };
     }
@@ -75,7 +78,7 @@ export function chunkLayers(nbt: any, sliceY?: number): BlockLayer[] {
   }).filter(Boolean).sort((a: any, b: any) => b.y - a.y) as BlockLayer[];
 }
 
-export interface BlockLayer { y: number; block(index: number): string; biome?(index: number): string; properties?(index: number): Readonly<Record<string, string>> | undefined; fluid?(index: number): string | undefined }
+export interface BlockLayer { y: number; empty?: boolean; block(index: number): string; biome?(index: number): string; properties?(index: number): Readonly<Record<string, string>> | undefined; fluid?(index: number): string | undefined }
 
 export function chunkSurface(nbt: any, nether = false, sliceY?: number) {
   return surfaceFromLayers(chunkLayers(nbt, sliceY), nether, sliceY);

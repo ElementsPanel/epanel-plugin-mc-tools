@@ -81,7 +81,10 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
           request.body = [{ id: map.id, name: current.name, dimension: world.dimension, spawn: { x: world.spawn.x, z: world.spawn.z } }];
         } else if (event === MAP_SCENE_EVENT) {
           const scene = response as MapSceneTile;
-          request.body = { version: scene.version, quads: scene.quads, heights: scene.heights, chunks: scene.chunks, warnings: scene.warnings, limited: scene.limited };
+          request.body = { version: scene.version, quads: scene.quads,
+            ...(scene.tints === undefined ? {} : { tints: scene.tints }),
+            ...(scene.shading === undefined ? {} : { shading: scene.shading }),
+            heights: scene.heights, chunks: scene.chunks, warnings: scene.warnings, limited: scene.limited };
         } else {
           const tile = response as MapTile;
           request.body = { image: tile.image, chunks: tile.chunks, warnings: tile.warnings };

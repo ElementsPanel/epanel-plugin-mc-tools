@@ -161,5 +161,8 @@
   "MC_MAP_3D_LOADING": "Chargement de la scène 3D…",
   "MC_MAP_3D_EMPTY": "Aucun bloc sauvegardé à proximité. Choisissez d’autres coordonnées ou revenez au point d’apparition.",
   "MC_MAP_WEBGL_UNAVAILABLE": "Ce navigateur ne peut pas afficher la scène 3D. Retour en 2D ; activez l’accélération matérielle et réessayez.",
-  "MC_MAP_SCENE_LIMIT": "Cette scène est très complexe. Le terrain proche est prioritaire ; zoomez ou déplacez-vous pour explorer davantage."
+  "MC_MAP_SCENE_LIMIT": "Cette scène est très complexe. Le terrain proche est prioritaire ; zoomez ou déplacez-vous pour explorer davantage.",
+  "MC_MAP_WORLDS_MENU": "Mondes",
+  "MC_MAP_BACK": "Retour",
+  "MC_MAP_POSITION_SETTINGS": "Position et couches"
 }

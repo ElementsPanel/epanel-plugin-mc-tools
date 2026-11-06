@@ -116,7 +116,7 @@ export class WorldMapService {
       const tile = { ...await meshScene(chunks, world.dimension === "minecraft:the_nether", y, () => this.disposed, neighbors), chunks: chunks.length, warnings };
       if (!this.disposed && !warnings && !tile.limited) {
         this.sceneBytes -= this.sceneCache.get(key)?.bytes || 0;
-        const bytes = tile.quads.length + tile.heights.length;
+        const bytes = tile.quads.length + tile.heights.length + (tile.tints?.length ?? 0);
         this.sceneCache.set(key, { stamp, tile, bytes }); this.sceneBytes += bytes;
         while (this.sceneBytes > 32 * 1024 * 1024 || this.sceneCache.size > 128) {
           const oldest = this.sceneCache.keys().next().value!;
@@ -147,7 +147,7 @@ export class WorldMapService {
     const chunks: SceneChunk[] = [], neighbors: SceneChunk[] = [];
     const result = await readJavaChunks(world, files, (nbt, x, z) => {
       x -= tileX * 2; z -= tileZ * 2;
-      (x >= 0 && x < 2 && z >= 0 && z < 2 ? chunks : neighbors).push({ x, z, layers: chunkLayers(nbt) });
+      (x >= 0 && x < 2 && z >= 0 && z < 2 ? chunks : neighbors).push({ x, z, layers: chunkLayers(nbt, undefined, true) });
     }, () => this.disposed);
     return finish(stamp, chunks, neighbors, result.warnings);
   }

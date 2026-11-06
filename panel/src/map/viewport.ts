@@ -65,7 +65,8 @@ export class MapViewport {
   private detailCanvas?: HTMLCanvasElement;
   private backdropCanvas?: HTMLCanvasElement;
   private detailFrame?: { camera: Camera; width: number; height: number; orthographic: boolean; y?: number };
-  private detailAppearedAt?: number;
+  private detailOpacity = 0;
+  private detailFade?: { from: number; to: number; startedAt: number };
   private mode: "2d" | "3d" = "2d";
   private detailState?: MapViewState;
   private detailGeneration = 0;
@@ -77,7 +78,7 @@ export class MapViewport {
   private width = 1;
   private height = 1;
   private frame = 0;
-  private dragging?: { id: number; x: number; y: number };
+  private readonly pointers = new Map<number, { x: number; y: number }>();
   private active = 0;
   private error?: unknown;
   private zoomAnimation?: ZoomAnimation;
@@ -99,6 +100,7 @@ export class MapViewport {
     canvas.addEventListener("pointermove", this.move);
     canvas.addEventListener("pointerup", this.up);
     canvas.addEventListener("pointercancel", this.up);
+    canvas.addEventListener("lostpointercapture", this.up);
     canvas.addEventListener("wheel", this.wheel, { passive: false });
     this.observer = new ResizeObserver(entries => this.resize(entries.find(entry => entry.target === canvas)?.contentRect));
     this.observer.observe(canvas);
@@ -122,8 +124,7 @@ export class MapViewport {
     if (this.mode === mode || this.abort.signal.aborted) return;
     this.stopZoom();
     const previous = this.mode;
-    if (this.dragging) { this.canvas.releasePointerCapture(this.dragging.id); this.dragging = undefined; }
-    this.canvas.style.cursor = "grab";
+    this.clearPointers();
     this.mode = mode;
     if (this.detail) {
       if (mode === "3d") this.detail.setTopDownView(this.camera, this.width, this.height);
@@ -149,7 +150,8 @@ export class MapViewport {
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.zoomAnimation = undefined;
-    for (const [name, callback] of [["pointerdown", this.down], ["pointermove", this.move], ["pointerup", this.up], ["pointercancel", this.up], ["wheel", this.wheel]] as const) {
+    this.clearPointers();
+    for (const [name, callback] of [["pointerdown", this.down], ["pointermove", this.move], ["pointerup", this.up], ["pointercancel", this.up], ["lostpointercapture", this.up], ["wheel", this.wheel]] as const) {
       this.canvas.removeEventListener(name, callback as EventListener);
     }
     this.cache.clear();
@@ -212,27 +214,45 @@ export class MapViewport {
   }
 
   private down = (event: PointerEvent) => {
-    if (event.button !== 0 || this.mode === "3d" || this.detail?.isTransitioning) return;
+    if (event.button !== 0 || this.mode === "3d" || this.detail?.isTransitioning || this.pointers.size >= 2) return;
     this.stopZoom();
     this.schedule();
     this.canvas.setPointerCapture(event.pointerId);
-    this.dragging = { id: event.pointerId, ...this.pointerPosition(event) };
+    this.pointers.set(event.pointerId, this.pointerPosition(event));
     this.canvas.style.cursor = "grabbing";
   };
 
   private move = (event: PointerEvent) => {
-    if (this.dragging?.id !== event.pointerId) return;
-    const { x, y } = this.pointerPosition(event);
-    this.center(this.camera.x - (x - this.dragging.x) / this.camera.zoom, this.camera.z - (y - this.dragging.y) / this.camera.zoom);
-    this.dragging.x = x;
-    this.dragging.y = y;
+    if (!this.pointers.has(event.pointerId)) return;
+    this.stopZoom();
+    const before = this.gesture();
+    this.pointers.set(event.pointerId, this.pointerPosition(event));
+    const after = this.gesture();
+    // Apply distance and midpoint changes together, so the world point under
+    // the fingers follows their midpoint even while pinching and panning.
+    if (before.distance > 0 && after.distance > 0) {
+      zoomCamera(this.camera, this.width, this.height, before.x, before.y, this.camera.zoom * after.distance / before.distance);
+    }
+    this.center(this.camera.x - (after.x - before.x) / this.camera.zoom, this.camera.z - (after.y - before.y) / this.camera.zoom);
   };
 
   private up = (event: PointerEvent) => {
-    if (this.dragging?.id !== event.pointerId) return;
-    this.dragging = undefined;
-    this.canvas.style.cursor = "grab";
+    if (!this.pointers.delete(event.pointerId)) return;
+    if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
+    this.canvas.style.cursor = this.pointers.size ? "grabbing" : "grab";
   };
+
+  private gesture() {
+    const [a, b = a] = this.pointers.values();
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+
+  private clearPointers() {
+    const ids = [...this.pointers.keys()];
+    this.pointers.clear();
+    for (const id of ids) if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
+    this.canvas.style.cursor = "grab";
+  }
 
   private wheel = (event: WheelEvent) => {
     if (this.mode === "3d" || this.detail?.isTransitioning) return;
@@ -369,28 +389,46 @@ export class MapViewport {
   }
 
   private get wantsScene() { return this.mode === "3d" || this.camera.zoom >= MAP_DETAIL_ZOOM || !!this.detail?.isTransitioning; }
-  private get sceneVisible() {
-    return this.wantsScene && this.detail?.ready && !!this.detailCanvas?.width && this.detailFrame?.y === this.sliceY
-      && (this.mode === "3d" || !this.detailFrame?.orthographic || this.detailAppearedAt !== undefined || this.detailState?.loading === 0);
+  private get sceneReady() {
+    return this.detail?.ready && !!this.detailCanvas?.width && this.detailFrame?.y === this.sliceY;
+  }
+  private get sceneVisible() { return this.sceneReady && this.detailOpacity > 0; }
+
+  private advanceDetailFade(time: number) {
+    const fade = this.detailFade;
+    if (!fade) return;
+    const duration = Math.max(1, DETAIL_FADE_DURATION * Math.abs(fade.to - fade.from));
+    const progress = Math.max(0, Math.min(1, (time - fade.startedAt) / duration));
+    this.detailOpacity = fade.from + (fade.to - fade.from) * easeOut(progress);
+    if (progress === 1) this.detailFade = undefined;
   }
 
   private presentScene(time = performance.now()) {
     const canvas = this.detailCanvas, frame = this.detailFrame;
     if (!canvas) return;
-    if (!this.sceneVisible || !frame) {
+    if (!this.sceneReady || !frame) {
       canvas.style.visibility = "hidden";
       canvas.style.opacity = "0";
-      this.detailAppearedAt = undefined;
+      this.detailOpacity = 0;
+      this.detailFade = undefined;
+      if (!this.wantsScene) this.detail?.setActive(false);
       return;
     }
-    // Reveal a complete top-down footprint over the color map. Background
-    // prefetches and later pans must not restart the fade or hide loaded terrain.
-    this.detailAppearedAt ??= time;
-    const progress = this.reducedMotion?.matches || !frame.orthographic || this.mode === "3d"
-      ? 1 : Math.max(0, Math.min(1, (time - this.detailAppearedAt) / DETAIL_FADE_DURATION));
-    canvas.style.visibility = "visible";
-    canvas.style.opacity = String(easeOut(progress));
-    if (progress < 1) this.schedule();
+    this.advanceDetailFade(time);
+    // Wait for the initial footprint, then keep loaded terrain visible through
+    // pans and reverse either fade from its current opacity on rapid zooms.
+    const target = this.wantsScene && (this.mode === "3d" || !frame.orthographic || this.detailOpacity > 0
+      || this.detailFade?.to === 1 || this.detailState?.loading === 0) ? 1 : 0;
+    if (this.reducedMotion?.matches || !frame.orthographic || this.mode === "3d") {
+      this.detailOpacity = target;
+      this.detailFade = undefined;
+    } else if (target !== (this.detailFade?.to ?? this.detailOpacity)) {
+      this.detailFade = { from: this.detailOpacity, to: target, startedAt: time };
+    }
+    canvas.style.visibility = this.detailOpacity > 0 || this.detailFade ? "visible" : "hidden";
+    canvas.style.opacity = String(this.detailOpacity);
+    if (this.detailFade) this.schedule();
+    else if (!this.wantsScene) this.detail?.setActive(false);
     // Composite WebGL directly. Copying it with 2D drawImage can swap R/B channels
     // on accelerated browser backends, including for textures without biome tint.
     const scale = frame.orthographic ? this.camera.zoom / frame.camera.zoom : 1;
@@ -402,7 +440,7 @@ export class MapViewport {
   }
 
   private updateDetail() {
-    if (!this.loadScene || !this.wantsScene) {
+    if (!this.loadScene || !this.wantsScene && this.detailOpacity === 0 && !this.detailFade) {
       // A far overview pauses the shared scene; its bounded cache is reused on return.
       this.detail?.setActive(false);
       if (this.detailLoading) { this.detailGeneration++; this.detailLoading = false; }
@@ -418,7 +456,7 @@ export class MapViewport {
       else this.detail.setSize(this.width, this.height);
       return;
     }
-    if (this.detailLoading) return;
+    if (this.detailLoading || !this.wantsScene) return;
     const generation = ++this.detailGeneration;
     this.detailLoading = true;
     void loadSceneViewport().then(({ SceneViewport }) => {
@@ -467,7 +505,7 @@ export class MapViewport {
     }
     this.backdropCanvas = undefined;
     this.detailCanvas = undefined; this.detailFrame = undefined; this.detailState = undefined;
-    this.detailAppearedAt = undefined;
+    this.detailOpacity = 0; this.detailFade = undefined;
   }
 
   private async fetchTile(item: { x: number; z: number; key: string }) {

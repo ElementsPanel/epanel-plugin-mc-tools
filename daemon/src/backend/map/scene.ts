@@ -1,16 +1,18 @@
 import { MAP_MAX_Y, MAP_MIN_Y, MAP_SCENE_MAX_QUADS, MAP_SCENE_SIZE, type MapSceneTile } from "../../../../shared/map";
-import { SceneKind, SCENE_EMISSIVE, SCENE_GRASS_OVERLAY, SCENE_GROUND } from "../../../../shared/scene";
+import { SceneKind, SCENE_EMISSIVE, SCENE_GRASS_OVERLAY, SCENE_GROUND, SCENE_MODEL } from "../../../../shared/scene";
 import type { BlockLayer } from "./chunk";
 import { isAir } from "./colors";
-import { blockFluid, blockMaterial, type Material } from "./materials";
+import { blockFluid, blockMaterial, blockStateKey, type Material } from "./materials";
+import { biomeBlend } from "./biome-blend";
+import { fireElements } from "../../../../shared/fire";
 
 export interface SceneChunk { x: number; z: number; layers: BlockLayer[] }
 const SIZE = MAP_SCENE_SIZE, AREA = SIZE * SIZE;
 const STRIDE = SIZE + 2, PADDED_AREA = STRIDE * STRIDE;
 /** Cull hidden voxel faces, then merge coplanar faces of the same block material. */
-export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: number, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "heights" | "limited">> {
+export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: number, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "tints" | "heights" | "limited">> {
   const cap = sliceY ?? (nether ? 120 : MAP_MAX_Y);
-  const layers = chunks.flatMap(chunk => chunk.layers).filter(layer => layer.y * 16 <= cap);
+  const layers = chunks.flatMap(chunk => chunk.layers).filter(layer => !layer.empty && layer.y * 16 <= cap);
   const minY = layers.length ? Math.max(MAP_MIN_Y, Math.min(...layers.map(layer => layer.y * 16))) : 0;
   const maxY = layers.length ? Math.min(cap, Math.max(...layers.map(layer => layer.y * 16 + 15))) : -1;
   const height = Math.max(0, maxY - minY + 1);
@@ -21,20 +23,49 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
   const materials: Material[] = [{ name: "air", color: 0xffffff, model: blockMaterial("air").model, kind: SceneKind.Opaque, emissive: false }];
   const names = new Map<string, number>();
   const base = new Map<string, Material>();
-  const palette = (name: string, biome?: string, properties?: Readonly<Record<string, string>>) => {
-    const upper = properties?.half === "upper" || properties?.upper_block_bit === "1" || properties?.upper_block_bit === "true";
-    const state = name + (upper ? "[half=upper]" : "");
+  const blend = biomeBlend([...chunks, ...neighbors]);
+  const cornerTints = new Map<string, number[]>();
+  const cornerTint = (x: number, y: number, z: number, source: Material) => {
+    if (source.biomeTint === undefined) return [source.color >> 16, (source.color >> 8) & 255, source.color & 255];
+    const key = [x, y, z, source.biomeTint].join(":");
+    let rgb = cornerTints.get(key);
+    if (!rgb) {
+      rgb = [0, 0, 0];
+      // The blended field lives at block centers. Shared vertices sample the same
+      // eight centers, so adjacent blocks agree exactly at their common edge.
+      for (const dx of [-1, 0]) for (const dy of [-1, 0]) for (const dz of [-1, 0]) {
+        const color = blend(x + dx, y + dy, z + dz, source.biomeTint);
+        rgb[0] += color >> 16; rgb[1] += (color >> 8) & 255; rgb[2] += color & 255;
+      }
+      rgb = rgb.map(value => Math.round(value / 8)); cornerTints.set(key, rgb);
+    }
+    return rgb;
+  };
+  const tintFace = (x: number, y: number, z: number, w: number, h: number, face: number, source: Material) => {
+    const output: number[] = [], side = face < 6 ? face : 4;
+    const tinted = (source.model.tint | source.model.overlay) & (1 << side);
+    for (const [u, v] of [[0, 0], [1, 0], [1, 1], [0, 1]]) {
+      const point = face < 2 ? [x, y + u * w, z + v * h] : face < 4 ? [x + v * h, y, z + u * w]
+        : face < 6 ? [x + u * w, y + v * h, z] : [x + (face === 7 ? 1 - u : u), y + v, z + u];
+      output.push(...(tinted ? cornerTint(point[0], point[1], point[2], source) : [255, 255, 255]));
+    }
+    return output;
+  };
+  const palette = (name: string, x: number, y: number, z: number, biome?: string, properties?: Readonly<Record<string, string>>) => {
+    const state = blockStateKey(name, properties);
     let source = base.get(state);
-    if (!source) { source = blockMaterial(name, undefined, upper); base.set(state, source); }
+    if (!source) { source = blockMaterial(name, undefined, properties); base.set(state, source); }
     const tinted = source.color !== 0xffffff && !!(source.model.tint || source.model.overlay);
-    const key = tinted ? state + "@" + (biome ?? "minecraft:plains") : state;
+    const color = tinted && source.biomeTint !== undefined ? blend(x, y, z, source.biomeTint, biome) : undefined;
+    const key = tinted ? state + "@" + (color ?? biome ?? "minecraft:plains") : state;
     let id = names.get(key);
     if (id !== undefined) return id;
     if (isAir(name)) id = 0;
     else {
       if (materials.length >= 65536) throw new Error("MC_MAP_CORRUPT");
       id = materials.length;
-      materials.push(tinted && biome ? blockMaterial(name, biome, upper) : source);
+      const material = tinted && biome ? blockMaterial(name, biome, properties) : source;
+      materials.push(color !== undefined ? { ...material, color } : material);
     }
     names.set(key, id);
     return id;
@@ -43,6 +74,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
     const firstX = Math.max(0, -1 - chunk.x * 16), lastX = Math.min(16, SIZE + 1 - chunk.x * 16);
     const firstZ = Math.max(0, -1 - chunk.z * 16), lastZ = Math.min(16, SIZE + 1 - chunk.z * 16);
     for (const layer of chunk.layers) {
+      if (layer.empty) continue;
       if (disposed()) throw new Error("MC_MAP_UNAVAILABLE");
       for (let y = 0; y < 16; y++) {
         const worldY = layer.y * 16 + y;
@@ -54,9 +86,9 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
           const fluid = layer.fluid?.(index) ?? blockFluid(name, properties);
           if (fluid) {
             fluids ??= new Uint16Array(voxels.length);
-            fluids[position] = palette(fluid, biome);
+            fluids[position] = palette(fluid, chunk.x * 16 + x, worldY, chunk.z * 16 + z, biome);
           }
-          if (!/^(?:minecraft:)?(?:flowing_water|water|bubble_column)$/.test(name)) voxels[position] = palette(name, biome, properties);
+          if (!/^(?:minecraft:)?(?:flowing_water|water|bubble_column)$/.test(name)) voxels[position] = palette(name, chunk.x * 16 + x, worldY, chunk.z * 16 + z, biome, properties);
         }
       }
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -77,19 +109,25 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
   }
 
   const bytes = Buffer.alloc(MAP_SCENE_MAX_QUADS * 16);
-  let count = 0, limited = false;
+  const tints = Buffer.alloc(MAP_SCENE_MAX_QUADS * 12);
+  let count = 0, renderedCount = 0, limited = false;
   const quad = (x: number, y: number, z: number, width: number, tall: number, face: number, id: number, ao = 0) => {
-    if (count >= MAP_SCENE_MAX_QUADS) { limited = true; return; }
     const source = materials[id];
+    const elements = source.fire === undefined ? source.model.elements : fireElements(source.model, source.fire);
+    const cost = elements?.reduce((sum, element) => sum + Object.keys(element.faces).length, 0) ?? 1;
+    if (renderedCount + cost > MAP_SCENE_MAX_QUADS) { limited = true; return; }
+    renderedCount += cost;
     const side = face < 6 ? face : 4, overlay = !!(source.model.overlay & (1 << side));
     const color = (source.model.tint & (1 << side)) || overlay ? source.color : 0xffffff;
     const texture = source.model.faces[side];
     const offset = count++ * 16;
+    tints.set(tintFace(x, y + minY, z, width, tall, face, source), (count - 1) * 12);
     bytes[offset] = x; bytes[offset + 1] = z; bytes.writeInt16LE(y + minY, offset + 2);
     bytes.writeUInt16LE(width, offset + 4); bytes.writeUInt16LE(tall, offset + 6);
-    bytes[offset + 8] = face; bytes[offset + 9] = source.kind | (overlay ? SCENE_GRASS_OVERLAY : 0) | (source.emissive ? SCENE_EMISSIVE : 0) | (source.model.shape === "ground" ? SCENE_GROUND : 0);
+    bytes[offset + 8] = face; bytes[offset + 9] = source.kind | (overlay ? SCENE_GRASS_OVERLAY : 0) | (source.emissive ? SCENE_EMISSIVE : 0) | (source.model.shape === "ground" ? SCENE_GROUND : 0)
+      | (source.model.shape === "model" ? SCENE_MODEL | ((source.model.rotation ?? 0) / 90 << 6) : 0);
     bytes.writeUInt16LE(texture, offset + 10);
-    bytes[offset + 12] = color >> 16; bytes[offset + 13] = color >> 8; bytes[offset + 14] = color; bytes[offset + 15] = source.emissive ? 0 : ao;
+    bytes[offset + 12] = color >> 16; bytes[offset + 13] = color >> 8; bytes[offset + 14] = color; bytes[offset + 15] = source.fire ?? (source.emissive ? 0 : ao);
   };
   const cell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : voxels[indexOf(x, y, z)];
   const fluidCell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : fluids?.[indexOf(x, y, z)] || 0;
@@ -133,15 +171,21 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
               ao |= (sideA && sideB ? 3 : sideA + sideB + diagonal) << (corner * 2);
             }
           }
-          mask[j * width + i] = current && !occludes(neighbor, current) ? current | (ao << 16) : 0;
+          let gradient = 0;
+          if (current && !occludes(neighbor, current)) {
+            position[axis] = plane;
+            const colors = tintFace(position[0], position[1] + minY, position[2], 1, 1, axis * 2 + sign, materials[current]);
+            if (colors.some((value, i) => value !== colors[i % 3])) gradient = 1 << 24;
+          }
+          mask[j * width + i] = current && !occludes(neighbor, current) ? current | (ao << 16) | gradient : 0;
         }
         for (let j = 0; j < tall && !limited; j++) for (let i = 0; i < width && !limited;) {
           const value = mask[j * width + i];
           if (!value) { i++; continue; }
-          const id = value & 65535, ao = value >>> 16, corners = [ao & 3, (ao >> 2) & 3, (ao >> 4) & 3, (ao >> 6) & 3];
+          const id = value & 65535, ao = (value >>> 16) & 255, corners = [ao & 3, (ao >> 2) & 3, (ao >> 4) & 3, (ao >> 6) & 3];
           let w = 1, h = 1;
-          if (corners[0] === corners[1] && corners[2] === corners[3]) while (i + w < width && mask[j * width + i + w] === value) w++;
-          outer: while (j + h < tall && corners[0] === corners[3] && corners[1] === corners[2]) {
+          if (!(value & (1 << 24)) && corners[0] === corners[1] && corners[2] === corners[3]) while (i + w < width && mask[j * width + i + w] === value) w++;
+          outer: while (!(value & (1 << 24)) && j + h < tall && corners[0] === corners[3] && corners[1] === corners[2]) {
             for (let k = 0; k < w; k++) if (mask[(j + h) * width + i + k] !== value) break outer;
             h++;
           }
@@ -158,7 +202,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
     for (let z = 0; z < SIZE && !limited; z++) for (let x = 0; x < SIZE && !limited; x++) {
       const id = cell(x, y, z);
       if (!id || materials[id].kind !== SceneKind.Plant) continue;
-      if (materials[id].model.shape === "ground") quad(x, y, z, 1, 1, 2, id);
+      if (materials[id].model.shape === "ground" || materials[id].model.shape === "model") quad(x, y, z, 1, 1, 2, id);
       else { quad(x, y, z, 1, 1, 6, id); quad(x, y, z, 1, 1, 7, id); }
     }
     if (y % 16 === 0) {
@@ -166,5 +210,5 @@ export async function meshScene(chunks: SceneChunk[], nether = false, sliceY?: n
       await new Promise<void>(resolve => setImmediate(resolve));
     }
   }
-  return { version: 1, quads: bytes.subarray(0, count * 16).toString("base64"), heights: heights.toString("base64"), limited };
+  return { version: 1, quads: bytes.subarray(0, count * 16).toString("base64"), tints: tints.subarray(0, count * 12).toString("base64"), heights: heights.toString("base64"), limited };
 }

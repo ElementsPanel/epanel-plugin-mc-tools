@@ -145,7 +145,8 @@ test("Java 3D scenes read real region blocks, preserve negative coordinates, cac
   const world = (await service.worlds("server"))[0];
   const [a, b] = await Promise.all([service.scene("server", world.id, 0, 0), service.scene("server", world.id, 0, 0)]);
   assert.equal(a, b); assert.equal(a.chunks, 1); assert.equal(a.warnings, 0);
-  assert.equal(decodeScene(a).count, 6); assert.equal(decodeScene(a).heights[0], -1);
+  assert.deepEqual([...new Set(decodeScene(a).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
+  assert.equal(decodeScene(a).heights[0], -1);
   const negative = decodeScene(await service.scene("server", world.id, -1, -1));
   assert.equal(negative.heights[1023], 79); assert.equal(negative.heights[0], -32768);
   const slice = decodeScene(await service.scene("server", world.id, 0, 0, -8));
@@ -580,8 +581,8 @@ test("daemon map protocol returns public identifiers and hides filesystem errors
   assert.deepEqual(Object.keys(response[0]).sort(), ["dimension", "id", "name", "spawn"]);
   const world = response[0].id;
   await events.get("mc-tools/map/scene")({}, { instanceUuid: "server", world, x: 0, z: 0 });
-  assert.equal(decodeScene(response).count, 6);
-  assert.deepEqual(Object.keys(response).sort(), ["chunks", "heights", "limited", "quads", "version", "warnings"]);
+  assert.deepEqual([...new Set(decodeScene(response).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(Object.keys(response).sort(), ["chunks", "heights", "limited", "quads", "tints", "version", "warnings"]);
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0 });
   assert.equal(response.chunks, 1);
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0, y: 0 });

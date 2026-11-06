@@ -161,5 +161,8 @@
   "MC_MAP_3D_LOADING": "Loading the 3D scene…",
   "MC_MAP_3D_EMPTY": "No saved blocks nearby. Choose other coordinates or return to spawn.",
   "MC_MAP_WEBGL_UNAVAILABLE": "This browser cannot render the 3D scene. Returned to 2D; enable hardware acceleration and try again.",
-  "MC_MAP_SCENE_LIMIT": "This scene is very complex. Nearby terrain takes priority; zoom in or move to explore further."
+  "MC_MAP_SCENE_LIMIT": "This scene is very complex. Nearby terrain takes priority; zoom in or move to explore further.",
+  "MC_MAP_WORLDS_MENU": "Worlds",
+  "MC_MAP_BACK": "Back",
+  "MC_MAP_POSITION_SETTINGS": "Position and layers"
 }
