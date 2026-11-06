@@ -338,9 +338,9 @@ test("chat visibility commands hide a player from every map and confirm privatel
   f.service.track(f.instance);
   assert.equal(f.instance.listenerCount("data"), 1, "tracking twice keeps one listener");
 
-  f.instance.emit("data", chat("<Steve> $mapos off"));
+  f.instance.emit("data", chat("<Steve> $mappos off"));
   await until(() => f.tells.length && f.tells);
-  assert.equal(f.tells[0], 'tellraw Steve [{"text":"[Map] ","color":"gold"},{"text":"地图显示已关闭，输入 $mapos on 可恢复","color":"gray"}]');
+  assert.equal(f.tells[0], 'tellraw Steve {"text":"地图显示已关闭，输入 $mappos on 可恢复","color":"gray"}');
   now += 3000;
   assert.deepEqual(await names(), ["Alex"]);
   assert.deepEqual(await names("nether"), ["Alex"]);
@@ -348,7 +348,7 @@ test("chat visibility commands hide a player from every map and confirm privatel
   assert.equal((await f.service.list("server")).worldTimes.main, 6000, "hiding keeps the world clock");
   assert.deepEqual(hiddenNames(f.storage), ["Steve"]);
 
-  f.instance.emit("data", chat("<Steve> $mapos on"));
+  f.instance.emit("data", chat("<Steve> $mappos on"));
   await until(() => f.tells.length === 2 && f.tells);
   now += 3000;
   assert.deepEqual(await names(), ["Steve", "Alex"]);
@@ -359,9 +359,9 @@ test("the confirmation falls back to the console when RCON is not enabled", asyn
   const f = await fixture(t);
   await f.service.list("server");
   assert.equal(f.instance.listenerCount("data"), 1);
-  f.instance.emit("data", chat("[Not Secure] <Alex> $mapos off"));
+  f.instance.emit("data", chat("[Not Secure] <Alex> $mappos off"));
   await until(() => f.consoleCommands.length && f.consoleCommands);
-  assert.equal(f.consoleCommands[0], 'tellraw Alex [{"text":"[Map] ","color":"gold"},{"text":"地图显示已关闭，输入 $mapos on 可恢复","color":"gray"}]');
+  assert.equal(f.consoleCommands[0], 'tellraw Alex {"text":"地图显示已关闭，输入 $mappos on 可恢复","color":"gray"}');
   assert.deepEqual(f.tells, []);
   assert.deepEqual(hiddenNames(f.storage), ["Alex"]);
 });

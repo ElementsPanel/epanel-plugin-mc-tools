@@ -109,7 +109,7 @@ export class MapPlayerService {
     }, options.storage);
   }
 
-  /** Listen to chat now, so `$mapos` also works while nobody has the map open. */
+  /** Listen to chat now, so `$mappos` also works while nobody has the map open. */
   track(instance: Instance) {
     const type = instance.config.type || "";
     if (!instance.instanceUuid || !type.startsWith("minecraft/java") || /bungeecord|velocity/.test(type)) return;
@@ -139,12 +139,12 @@ export class MapPlayerService {
     for (const key of this.cache.keys()) if (key.startsWith(id + ":")) this.cache.delete(key);
   }
 
-  /** Private confirmation for `$mapos`, over RCON when available and the console otherwise. */
+  /** Private confirmation for `$mappos`, over RCON when available and the console otherwise. */
   private async reply(id: string, name: string, hidden: boolean) {
     const instance = this.instances.getInstance(id) as Instance | undefined;
     if (!instance) return;
-    const text = hidden ? "地图显示已关闭，输入 $mapos on 可恢复" : "地图显示已开启，输入 $mapos off 可关闭";
-    const command = `tellraw ${name} ${JSON.stringify([{ text: "[Map] ", color: "gold" }, { text, color: "gray" }])}`;
+    const text = hidden ? "地图显示已关闭，输入 $mappos on 可恢复" : "地图显示已开启，输入 $mappos off 可关闭";
+    const command = `tellraw ${name} ${JSON.stringify({ text, color: "gray" })}`;
     try {
       const root = await fs.realpath(instance.absoluteCwdPath());
       const target = await javaRconConfiguration(root, instance.config.pingConfig?.ip);
