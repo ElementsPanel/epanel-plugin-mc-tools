@@ -1,0 +1,261 @@
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const { EventEmitter } = require("node:events");
+const { loader, deferred } = require("./helpers.cjs");
+const load = loader();
+const { readRconPlayers } = load("daemon/src/backend/map/players.ts");
+const { javaRconConfiguration } = load("daemon/src/backend/map/rcon-config.ts");
+
+test("RCON parses concatenated vanilla 26.2 entity replies, negative coordinates, dimensions and normalized facing", async () => {
+  const calls = [];
+  const result = await readRconPlayers(async command => {
+    calls.push(command);
+    if (command === "list") return "There are 2 of a max of 20 players online: Steve, Alex";
+    if (command.endsWith(" Pos")) return "Steve has the following entity data: [-246.5d, 65.0d, -1.62E2d]Alex has the following entity data: [10.0d, 70.0d, 8.0d]";
+    if (command.endsWith(" Dimension")) return 'Steve has the following entity data: "minecraft:overworld"Alex has the following entity data: "minecraft:the_nether"';
+    if (command.endsWith(" Rotation")) return "Steve has the following entity data: [-90.0f, 0.0f]Alex has the following entity data: [450.0f, 20.0f]";
+    throw new Error(command);
+  });
+  assert.equal(calls.length, 4);
+  assert.deepEqual(result, { warnings: [], players: [
+    { name: "Steve", position: { x: -246.5, y: 65, z: -162, dimension: "minecraft:overworld", yaw: 270 } },
+    { name: "Alex", position: { x: 10, y: 70, z: 8, dimension: "minecraft:the_nether", yaw: 90 } }
+  ] });
+});
+
+test("partial positions remain listed, malformed coordinates are ignored and empty servers need only one command", async () => {
+  let count = 0;
+  assert.deepEqual(await readRconPlayers(async () => { count++; return "There are 0 of a max of 20 players online:"; }), { players: [], warnings: [] });
+  assert.equal(count, 1);
+  const result = await readRconPlayers(async command => command === "list" ? "There are 2 of a max of 20 players online: Steve, Alex"
+    : command.endsWith(" pos") ? "Steve has the following entity data: [1d, 2d, 3d]Alex has the following entity data: [NaNd, 2d, 3d]"
+      : command.endsWith(" dimension") ? 'Steve has the following entity data: "minecraft:overworld"' : "Found no elements matching query");
+  assert.equal(result.players[0].position.x, 1); assert.equal(result.players[0].position.yaw, undefined);
+  assert.equal(result.players[1].position, undefined);
+  assert.deepEqual(result.warnings, ["MC_MAP_PLAYERS_POSITION_UNAVAILABLE"]);
+  await assert.rejects(readRconPlayers(async () => "Unknown command"), /MC_MAP_RCON_RESPONSE/);
+});
+
+function packet(id, type, body = "") {
+  body = Buffer.from(body);
+  const bytes = Buffer.alloc(body.length + 14);
+  bytes.writeInt32LE(body.length + 10); bytes.writeInt32LE(id, 4); bytes.writeInt32LE(type, 8); body.copy(bytes, 12);
+  return bytes;
+}
+function connection(respond) {
+  const sockets = [];
+  const { RconConnection } = loader({ "node:net": { createConnection() {
+    const socket = new EventEmitter(); sockets.push(socket);
+    socket.setNoDelay = () => {};
+    socket.setKeepAlive = (enabled, delay) => { socket.keepAlive = { enabled, delay }; };
+    socket.unref = () => {};
+    socket.destroy = () => { socket.destroyed = true; };
+    socket.write = bytes => respond(socket, bytes.readInt32LE(4), bytes.readInt32LE(8), bytes.subarray(12, -2).toString());
+    return socket;
+  } } })("daemon/src/backend/map/rcon.ts");
+  const open = (signal = new AbortController().signal, timeout = 1000) => new RconConnection({ host: "localhost", port: 25575, password: "secret" }, signal, timeout);
+  return { sockets, open, run: async (fn, signal, timeout) => { const client = open(signal, timeout); try { return await client.run(fn); } finally { client.close(); } } };
+}
+
+test("RCON waits before sending a delimiter, joins fragmented UTF-8 packets and separates consecutive commands", async () => {
+  let received = false, commandId, calls = [];
+  const f = connection((socket, id, type, body) => {
+    calls.push(body);
+    if (type === 3) { queueMicrotask(() => socket.emit("data", packet(id, 2))); return; }
+    if (body) {
+      received = false; commandId = id;
+      const data = packet(id, 0, Buffer.from("玩家").subarray(0, 2));
+      queueMicrotask(() => { received = true; socket.emit("data", data.subarray(0, 3)); socket.emit("data", data.subarray(3)); });
+    } else {
+      assert(received, "26.2 cannot accept pipelined requests before a reply");
+      queueMicrotask(() => socket.emit("data", Buffer.concat([packet(commandId, 0, Buffer.from("玩家").subarray(2)), packet(id, 0, "Unknown command")])));
+    }
+  });
+  assert.deepEqual(await f.run(async command => [await command("list"), await command("execute as @a run data get entity @s Pos")]), ["玩家", "玩家"]);
+  assert.deepEqual(calls, ["secret", "list", "", "execute as @a run data get entity @s Pos", ""]);
+  assert(f.sockets.every(socket => socket.destroyed));
+});
+
+test("RCON sanitizes auth, malformed packet, timeout and cancellation failures and closes connections", async () => {
+  for (const kind of ["auth", "packet", "timeout", "abort"]) {
+    const abort = new AbortController();
+    const f = connection(socket => queueMicrotask(() => {
+      if (kind === "auth") socket.emit("data", packet(-1, 2));
+      if (kind === "packet") { const bad = Buffer.alloc(4); bad.writeInt32LE(-1); socket.emit("data", bad); }
+      if (kind === "abort") abort.abort();
+    }));
+    await assert.rejects(f.run(async command => command("list"), abort.signal, 15), new RegExp(kind === "auth" ? "MC_MAP_RCON_AUTH" : kind === "packet" ? "MC_MAP_RCON_RESPONSE" : "MC_MAP_RCON_UNAVAILABLE"));
+    assert(f.sockets.every(socket => socket.destroyed));
+  }
+});
+
+test("RCON keeps the authenticated socket idle beyond request timeouts and serializes concurrent reads", async t => {
+  const calls = [];
+  const f = connection((socket, id, type, body) => {
+    calls.push(body);
+    queueMicrotask(() => socket.emit("data", packet(id, type === 3 ? 2 : 0, body ? "ok" : "")));
+  });
+  const client = f.open(undefined, 20); t.after(() => client.close());
+  assert.equal(await client.run(command => command("first")), "ok");
+  await new Promise(resolve => setTimeout(resolve, 45));
+  assert.equal(client.closed, false); assert.equal(f.sockets[0].destroyed, undefined);
+  await Promise.all([
+    client.run(async command => { await command("second"); await command("third"); }),
+    client.run(command => command("fourth"))
+  ]);
+  assert.deepEqual(calls, ["secret", "first", "", "second", "", "third", "", "fourth", ""]);
+  assert.deepEqual(f.sockets[0].keepAlive, { enabled: true, delay: 30_000 });
+  assert.equal(f.sockets.length, 1);
+  f.sockets[0].emit("close"); assert.equal(client.closed, true);
+  await assert.rejects(client.run(command => command("fifth")), /MC_MAP_RCON_UNAVAILABLE/);
+});
+
+async function fixture(t, text = "# Keep\r\nenable-rcon=false\r\nrcon.port=25576\r\nmotd=Welcome\r\n", overrides = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "epanel-map-rcon-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "server.properties"); await fs.writeFile(file, text, { mode: 0o640 });
+  const instance = new EventEmitter(), restarts = [], reads = [], connections = [];
+  instance.config = { type: "minecraft/java" }; instance.running = 3;
+  instance.status = () => instance.running; instance.absoluteCwdPath = () => root;
+  instance.execPreset = async name => { restarts.push(name); assert((await javaRconConfiguration(root)).enabled); };
+  const worlds = [
+    { id: "main", root, directory: path.join(root, "world"), dimension: "minecraft:overworld" },
+    { id: "nether", root, directory: path.join(root, "world_nether", "DIM-1"), dimension: "minecraft:the_nether" },
+    { id: "imported", root, directory: path.join(root, "oldworld"), dimension: "minecraft:overworld" }
+  ];
+  const { MapPlayerService } = loader({ "./rcon": { RconConnection: class {
+    constructor(target, signal) { this.target = target; this.signal = signal; this.closed = false; connections.push(this); signal.addEventListener("abort", () => this.close()); }
+    close() { this.closed = true; }
+    async run() { reads.push({ target: this.target, signal: this.signal }); return { players: [
+    { name: "Steve", position: { x: 1, y: 64, z: 2, dimension: "minecraft:overworld" } },
+    { name: "Alex", position: { x: 1, y: 64, z: 2, dimension: "minecraft:the_nether" } }
+  ], warnings: [] }; }
+  } }, ...overrides })("daemon/src/backend/map/players.ts");
+  const service = new MapPlayerService({ getInstance: () => instance }, async () => worlds);
+  t.after(() => service.dispose());
+  return { root, file, text, instance, restarts, reads, connections, service };
+}
+
+test("RCON setup does not modify until confirmed, preserves settings, generates a password and restarts once", async t => {
+  const f = await fixture(t);
+  assert.equal((await f.service.list("server")).rconEnabled, false);
+  for (const value of [undefined, false, "true", 1]) await assert.rejects(f.service.enable("server", value), /MC_MAP_INVALID/);
+  assert.equal(await fs.readFile(f.file, "utf8"), f.text); assert.deepEqual(f.restarts, []);
+  assert.deepEqual(await f.service.enable("server", true), { changed: true, restartRequested: true });
+  const config = await javaRconConfiguration(f.root), written = await fs.readFile(f.file, "utf8");
+  assert.match(config.password, /^[a-f0-9]{48}$/); assert.equal(config.port, 25576);
+  assert(written.startsWith(f.text.replace("enable-rcon=false", "enable-rcon=true")));
+  assert.equal((await fs.stat(f.file)).mode & 0o777, 0o640); assert.deepEqual(f.restarts, ["restart"]);
+  assert.deepEqual(await f.service.enable("server", true), { changed: false, restartRequested: false });
+  assert.deepEqual(f.restarts, ["restart"]);
+  assert.deepEqual(await fs.readdir(f.root), ["server.properties"]);
+  const roster = await f.service.list("server");
+  assert(!JSON.stringify(roster).includes(config.password)); assert.equal(roster.players[0].position.world, "main");
+  assert.deepEqual((await f.service.list("server", "nether")).players.map(player => player.name), ["Alex"]);
+  assert.equal(f.reads.length, 1); assert.equal(f.instance.listenerCount("exit"), 1);
+  assert.equal(f.reads[0].signal.aborted, false);
+});
+
+test("setup retains escaped passwords and never restarts after invalid config or failed writes", async t => {
+  const retained = await fixture(t, "motd=continued\\\nenable-rcon=false\nenable-rcon=false\nrcon.password=pass\\:word\\\\end\n");
+  await retained.service.enable("server", true);
+  assert.equal((await javaRconConfiguration(retained.root)).password, "pass:word\\end");
+  assert((await fs.readFile(retained.file, "utf8")).startsWith("motd=continued\\\nenable-rcon=false\n"));
+  for (const kind of ["port", "busy", "locked", "write", "bedrock"]) {
+    const f = await fixture(t, kind === "port" ? "enable-rcon=false\nrcon.port=0\n" : undefined,
+      kind === "write" ? { "node:fs/promises": { ...fs, rename: async () => { throw new Error("EACCES"); } } } : {});
+    if (kind === "busy") f.instance.running = 2;
+    if (kind === "locked") f.instance.lock = true;
+    if (kind === "bedrock") f.instance.config.type = "minecraft/bedrock";
+    await assert.rejects(f.service.enable("server", true), /MC_MAP_RCON_(CONFIG|BUSY|WRITE_FAILED|UNSUPPORTED)/);
+    assert.deepEqual(f.restarts, []); assert.equal(await fs.readFile(f.file, "utf8"), f.text);
+  }
+});
+
+test("concurrent confirmations cannot restart twice and restart failures leave a usable saved config", async t => {
+  const f = await fixture(t), gate = deferred(), entered = deferred();
+  f.instance.execPreset = async () => { entered.resolve(); await gate.promise; };
+  const enabling = f.service.enable("server", true); await entered.promise;
+  await assert.rejects(f.service.enable("server", true), /MC_MAP_RCON_BUSY/);
+  gate.reject(new Error("private error"));
+  await assert.rejects(enabling, /MC_MAP_RCON_RESTART_FAILED/);
+  assert((await javaRconConfiguration(f.root)).enabled);
+});
+
+test("offline instances do not connect and disposing cancels active RCON reads", async t => {
+  const started = deferred();
+  const f = await fixture(t, "enable-rcon=true\nrcon.password=test\n", { "./rcon": { RconConnection: class {
+    constructor(_target, signal) { this.signal = signal; }
+    close() { this.closed = true; }
+    async run() { started.resolve(this.signal); await new Promise((resolve, reject) => this.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true })); }
+  } } });
+  f.instance.running = 0; assert.deepEqual((await f.service.list("server")).players, []);
+  f.instance.running = 3;
+  const request = f.service.list("server"); const signal = await started.promise;
+  f.service.dispose(); assert(signal.aborted);
+  await assert.rejects(request, /MC_MAP_UNAVAILABLE/); assert.equal(f.instance.listenerCount("exit"), 0);
+});
+
+test("daemon reuses each instance session across refreshes, reconnects closed sockets and cleans up on server exit", async t => {
+  const f = await fixture(t, "enable-rcon=true\nrcon.password=test\n");
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  await Promise.all([f.service.list("server"), f.service.list("server", "nether")]);
+  now += 3000; await f.service.list("server");
+  assert.equal(f.connections.length, 1); assert.equal(f.reads.length, 2); assert.equal(f.connections[0].closed, false);
+  assert.equal(f.instance.listenerCount("exit"), 1);
+  f.connections[0].close(); now += 3000; await f.service.list("server");
+  assert.equal(f.connections.length, 2); assert.equal(f.instance.listenerCount("exit"), 1);
+  f.instance.running = 0; f.instance.emit("exit");
+  assert.equal(f.connections[1].closed, true); assert.equal(f.instance.listenerCount("exit"), 0);
+  assert.deepEqual((await f.service.list("server")).players, []);
+  f.instance.running = 3; await f.service.list("server");
+  assert.equal(f.connections.length, 3); assert.equal(f.connections[2].closed, false);
+  f.service.dispose(); assert(f.connections.every(connection => connection.closed));
+  assert.equal(f.instance.listenerCount("exit"), 0);
+});
+
+test("RCON config changes replace only that instance's connection and disabling RCON closes it", async t => {
+  const f = await fixture(t, "enable-rcon=true\nrcon.password=before\n");
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  await f.service.list("first"); await f.service.list("second");
+  assert.equal(f.connections.length, 2);
+  await fs.writeFile(f.file, "enable-rcon=true\nrcon.password=after\nrcon.port=25580\n");
+  now += 3000; await f.service.list("first");
+  assert.equal(f.connections[0].closed, true); assert.equal(f.connections[1].closed, false);
+  assert.equal(f.connections[2].target.password, "after"); assert.equal(f.connections[2].target.port, 25580);
+  await fs.writeFile(f.file, "enable-rcon=false\nrcon.password=after\n");
+  now += 3000; assert.equal((await f.service.list("first")).rconEnabled, false);
+  assert.equal(f.connections[2].closed, true); assert.equal(f.connections[1].closed, false);
+});
+
+test("map player routes enforce login and instance access, and forward only explicit RCON confirmations", async () => {
+  const routes = new Map(), calls = [], disposal = [];
+  const ctx = {
+    koa: { router: () => ({ get: (name, ...handlers) => routes.set("GET " + name, handlers), post: (name, ...handlers) => routes.set("POST " + name, handlers) }) },
+    on: (_event, callback) => disposal.push(callback), roles: { USER: 1 },
+    middleware: {
+      permission: () => async (request, next) => { if (request.logged) await next(); else request.status = 403; },
+      validator: () => async (_request, next) => next(),
+      instanceAccess: async (request, next) => { if (request.allowed) await next(); else request.status = 403; }
+    },
+    remote: { services: { getInstance: () => ({ available: true }) }, Request: class { async request(event, data) { calls.push({ event, data }); return {}; } } }
+  };
+  load("panel/src/backend/map-players.ts").registerMapPlayerRoutes(ctx);
+  const request = async (route, options = {}) => {
+    const request = { query: { uuid: "server", daemonId: "node", world: "injected" }, request: { body: { confirmed: true, password: "injected" } }, set() {}, ...options };
+    const handlers = routes.get(route), run = index => handlers[index]?.(request, () => run(index + 1));
+    await run(0); return request;
+  };
+  assert.equal((await request("GET /players")).status, 403);
+  assert.equal((await request("POST /rcon/enable", { logged: true })).status, 403); assert.deepEqual(calls, []);
+  const invalid = await request("POST /rcon/enable", { logged: true, allowed: true, request: { body: {} } });
+  assert.equal(invalid.body.message, "MC_MAP_INVALID"); assert.deepEqual(calls, []);
+  await request("POST /rcon/enable", { logged: true, allowed: true });
+  assert.deepEqual(calls, [{ event: "mc-tools/map/rcon-enable", data: { instanceUuid: "server", confirmed: true } }]);
+  await request("GET /players", { logged: true, allowed: true });
+  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/players", data: { instanceUuid: "server" } });
+  disposal.forEach(callback => callback());
+});

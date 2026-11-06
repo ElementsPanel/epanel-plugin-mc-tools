@@ -79,9 +79,9 @@ function animatedViewport(t, reduced = false) {
     getContext() { return this.context; }
   };
   const context = {
-    globalAlpha: 1, setTransform() {}, fillRect() {}, beginPath() {}, arc() {}, stroke() {}, moveTo() {}, lineTo() {},
+    globalAlpha: 1, setTransform() {}, fillRect() {}, beginPath() {}, arc() {}, stroke() { markers.push(this.globalAlpha); }, moveTo() {}, lineTo() {},
     drawImage(image, ...bounds) { images.push({ image, bounds, alpha: this.globalAlpha }); },
-    fill() { markers.push(this.globalAlpha); }
+    fill() {}
   };
   const canvas = {
     style: {}, clientWidth: 512, clientHeight: 256, getBoundingClientRect: () => ({ left: 10, top: 20, width: 512, height: 256 }), getContext: () => context,
@@ -97,6 +97,25 @@ function animatedViewport(t, reduced = false) {
   const touch = (type, pointerId, x, y) => listeners.get(type)({ pointerType: "touch", button: 0, pointerId, clientX: x + 10, clientY: y + 20 });
   return { view, worldPosition, frames, listeners, requests, images, markers, states, blends, motion, frame, wheel, touch, captured, canvas };
 }
+
+test("2D WASD and right-drag pan the map, keep spawn projection aligned, and preserve browser shortcuts", t => {
+  const f = animatedViewport(t); f.frame(0);
+  assert.deepEqual(f.view.projectSpawn(), { x: 256, y: 128 });
+  let prevented = 0;
+  const key = (code, extras = {}) => f.listeners.get("keydown")({ code, preventDefault() { prevented++; }, ...extras });
+  key("KeyW"); key("KeyD");
+  assert.deepEqual(f.view.camera, { x: 8, z: -8, zoom: 2 });
+  assert.deepEqual(f.view.projectSpawn(), { x: 240, y: 144 });
+  key("ArrowDown"); key("ArrowLeft"); assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 });
+  key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true });
+  assert.equal(prevented, 4); assert.deepEqual(f.view.camera, { x: 0, z: 0, zoom: 2 });
+  f.listeners.get("pointerdown")({ button: 2, pointerId: 1, clientX: 100, clientY: 100 });
+  f.listeners.get("pointermove")({ pointerId: 1, clientX: 120, clientY: 130 });
+  assert.deepEqual(f.view.camera, { x: -10, z: -15, zoom: 2 });
+  f.listeners.get("pointerup")({ pointerId: 1 });
+  assert.equal(f.captured.size, 0);
+  f.listeners.get("contextmenu")({ preventDefault() { prevented++; } }); assert.equal(prevented, 5);
+});
 
 test("touch pinch and two-finger pan preserve the midpoint's world position and continue as a single-finger drag", t => {
   const f = animatedViewport(t); f.frame(0);
@@ -324,6 +343,13 @@ test("map API shares authentication, encodes instance parameters, forwards cance
   assert.equal(scene.searchParams.get("y"), "0");
   assert.equal(requests.at(-1).options.headers.Authorization, "Bearer token");
   assert.equal(authentications, 1);
+  await api.players(signal);
+  assert.equal(new URL(requests.at(-1).url, "http://localhost").pathname, "/api/mc-tools/map/players");
+  await api.enableRcon(signal);
+  assert.equal(new URL(requests.at(-1).url, "http://localhost").pathname, "/api/mc-tools/map/rcon/enable");
+  assert.equal(requests.at(-1).options.method, "POST");
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), { confirmed: true });
+  assert.equal(requests.at(-1).options.headers.Authorization, "Bearer token");
   await api.worlds(signal, true);
   assert.equal(authentications, 2);
   globalThis.fetch = async () => ({ ok: false, json: async () => ({ status: 403, data: "Forbidden" }) });
@@ -342,6 +368,7 @@ function mapComponent(overrides) {
     if (id === "vuetify/components" || id.endsWith(".vue")) return {};
     if (id === "../../../shared/map") return loader()("shared/map.ts");
     if (id === "./page") return loader()("panel/src/map/page.ts");
+    if (id === "./player-state" || id === "./player-markers") return loader({ "../settings": { t: key => key } })("panel/src/map/" + id.slice(2) + ".ts");
     return require(id);
   };
   mod._compile(transformSync(script.content, { loader: "ts", format: "cjs" }).code, filename);

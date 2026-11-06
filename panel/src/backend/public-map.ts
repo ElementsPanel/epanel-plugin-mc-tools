@@ -1,6 +1,7 @@
 import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight, parseMapSource, publicMapId, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import type { MapPanelContext } from "./index";
 import type { McToolsSettings } from "./settings";
+import { MAP_PLAYERS_EVENT, type MapPlayerRoster } from "../../../shared/map-players";
 
 export interface PublicMapContext extends MapPanelContext {
   identity: { of(request: any): { elevated: boolean } };
@@ -49,7 +50,7 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
       };
     });
 
-  for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT], ["/scene", MAP_SCENE_EVENT]]) {
+  for (const [route, event] of [["/worlds", MAP_WORLDS_EVENT], ["/tile", MAP_TILE_EVENT], ["/scene", MAP_SCENE_EVENT], ["/players", MAP_PLAYERS_EVENT]]) {
     router.get(route, noStore, async (request: any) => {
       try {
         const map = configured(request.query.map);
@@ -57,7 +58,8 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         const node = ctx.remote.services.getInstance(source.daemonId);
         if (!node?.available) throw new Error("MC_MAP_NODE_OFFLINE");
         const data: Record<string, unknown> = { instanceUuid: source.instanceUuid };
-        if (event !== MAP_WORLDS_EVENT) {
+        if (event === MAP_PLAYERS_EVENT) data.world = source.world;
+        else if (event !== MAP_WORLDS_EVENT) {
           const coordinate = event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate;
           Object.assign(data, { world: source.world, x: integer(request.query.x, coordinate), z: integer(request.query.z, coordinate) });
           if (request.query.y !== undefined) data.y = integer(request.query.y, mapHeight);
@@ -74,7 +76,12 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         const response = await new ctx.remote.Request(node).request(event, data, 30_000);
         const current = configured(map.id);
         if (current.source !== map.source) throw new Error("MC_MAP_PUBLIC_NOT_FOUND");
-        if (event === MAP_WORLDS_EVENT) {
+        if (event === MAP_PLAYERS_EVENT) {
+          const roster = response as MapPlayerRoster;
+          request.body = { edition: roster.edition, running: roster.running, rconEnabled: roster.rconEnabled, warnings: roster.warnings,
+            players: roster.players.filter(player => player.position?.world === source.world).map(({ name, position }) => ({ name,
+              position: { x: position!.x, y: position!.y, z: position!.z, yaw: position!.yaw, dimension: position!.dimension, world: map.id } })) };
+        } else if (event === MAP_WORLDS_EVENT) {
           if (!Array.isArray(response)) throw new Error("MC_MAP_READ_FAILED");
           const world = (response as MapWorld[]).find((item) => item.id === source.world);
           if (!world) throw new Error("MC_MAP_WORLD_MISSING");

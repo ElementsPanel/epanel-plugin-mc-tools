@@ -116,6 +116,36 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
   return { view, frame, ready: () => ready(), frames, rendered, listeners, uniforms, requests, states, visibleTopDownTiles };
 }
 
+test("3D uses left orbit, right pan and WASD to move in camera-relative directions without changing the view angle", t => {
+  const f = sceneFixture(t, true, false, true); f.ready(); f.frame(0);
+  assert.deepEqual(f.view.controls.mouseButtons, { LEFT: three.MOUSE.ROTATE, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.PAN });
+  assert.deepEqual(f.view.controls.touches, { ONE: three.TOUCH.ROTATE, TWO: three.TOUCH.DOLLY_PAN });
+  const start = f.view.controls.target.clone(), offset = f.view.viewCamera.position.clone().sub(start);
+  let prevented = 0;
+  const key = (code, extras = {}) => f.listeners.get("keydown")({ code, preventDefault() { prevented++; }, ...extras });
+  key("KeyW");
+  assert(f.view.controls.target.x < start.x && f.view.controls.target.z < start.z);
+  near(f.view.viewCamera.position.clone().sub(f.view.controls.target).distanceTo(offset), 0);
+  key("KeyS"); near(f.view.controls.target.distanceTo(start), 0);
+  key("KeyA"); assert(f.view.controls.target.x < start.x && f.view.controls.target.z > start.z);
+  key("KeyD"); near(f.view.controls.target.distanceTo(start), 0);
+  key("ArrowUp"); key("ArrowDown"); near(f.view.controls.target.distanceTo(start), 0);
+  key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true }); assert.equal(prevented, 6);
+  f.view.setProjection("orthographic"); key("KeyW"); assert.equal(prevented, 6);
+  f.view.dispose(); assert.equal(f.listeners.has("keydown"), false);
+});
+
+test("spawn compass projects above saved terrain and follows both camera modes", async t => {
+  const f = sceneFixture(t, true, true); f.ready(); f.frame(0);
+  assert.equal(f.view.projectSpawn(), undefined);
+  for (let i = 1; i <= 4; i++) { await tick(); f.frame(i * 16); }
+  const expected = f.view.project({ x: 8, y: 67.5, z: -16 });
+  assert.deepEqual(f.view.projectSpawn(), expected);
+  f.view.setProjection("perspective"); f.frame(100);
+  assert.deepEqual(f.view.projectSpawn(), f.view.project({ x: 8, y: 67.5, z: -16 }));
+  assert(f.view.projectSpawn());
+});
+
 test("top-down camera updates render synchronously and consume the queued GPU frame", t => {
   const f = sceneFixture(t, true, true); f.ready(); f.frame(0);
   const count = f.rendered.length;
@@ -129,6 +159,27 @@ test("top-down camera updates render synchronously and consume the queued GPU fr
   f.view.renderTopDown(); assert.equal(f.rendered.length, count + 1);
   f.view.setProjection("perspective"); f.view.renderTopDown();
   assert.equal(f.rendered.length, count + 1, "orbit transitions keep their animation scheduling");
+});
+
+test("player projections follow rendered perspective transitions and rebased world coordinates", t => {
+  const f = sceneFixture(t, false, true); f.ready(); f.frame(0);
+  const initial = f.view.project({ x: f.view.camera.x + 10, y: 66, z: f.view.camera.z - 5 });
+  near(initial.x, 550 + 40); near(initial.y, 350 - 20);
+  f.view.setProjection("perspective");
+  for (const time of [0, 80, 160, 240, 500]) {
+    f.frame(time);
+    const point = { x: f.view.camera.x + 2, y: 66, z: f.view.camera.z + 1 };
+    const rendered = f.rendered.at(-1).camera;
+    const ndc = new three.Vector3(point.x - f.view.origin.x, point.y, point.z - f.view.origin.z).project(rendered);
+    const actual = f.view.project(point);
+    near(actual.x, (ndc.x + 1) * 550); near(actual.y, (1 - ndc.y) * 350);
+  }
+  f.view.center(-2500, 1800); f.frame(600);
+  const point = { x: -2500, y: 66, z: 1800 }, rendered = f.rendered.at(-1).camera;
+  assert.notEqual(f.view.origin.x, 0);
+  const expected = new three.Vector3(point.x - f.view.origin.x, point.y, point.z - f.view.origin.z).project(rendered);
+  near(f.view.project(point).x, (expected.x + 1) * 550);
+  assert.equal(f.view.project({ x: 0, y: Infinity, z: 0 }), undefined);
 });
 
 test("top-down prefetch warms every edge, prioritizes visible tiles, and reveals cached geometry immediately on a drag", async t => {
@@ -193,7 +244,7 @@ test("projection changes animate the same scene and retain its meshes, materials
     assert.equal(f.view.renderer, renderer); assert.equal(f.rendered.at(-1).scene, scene);
     assert.equal(f.view.materials, materials); assert.equal(f.view.cache.get(cached.key), cached);
     assert.equal(cached.group.children[0].geometry, geometry);
-    assert(scene.children.every(child => child === f.view.marker || child.isGroup), "no screenshot or second-map transition plane");
+    assert(scene.children.every(child => child.isGroup), "no screenshot or second-map transition plane");
   };
   f.view.setProjection("perspective"); f.frame(720);
   assert.equal(f.view.controls.enabled, false); assertShared();
@@ -272,7 +323,7 @@ test("the orthographic scene has exact 2D scale at every elevation and remains a
     const render = f.rendered.at(-1), camera = render.camera;
     assert.equal(camera.isOrthographicCamera, true);
     assert.equal(render.scene.fog, null); assert.equal(render.scene.background, null);
-    assert.equal(f.view.controls.enabled, false); assert.equal(f.view.marker.visible, false);
+    assert.equal(f.view.controls.enabled, false);
     assert(f.uniforms.uFogNear.value > camera.far, "overhead camera must not fog out terrain");
     for (const y of [MAP_MIN_Y, -64, 64, MAP_MAX_Y + 1]) {
       const projected = new three.Vector3(camera.position.x + 17, y, camera.position.z + 23).project(camera);

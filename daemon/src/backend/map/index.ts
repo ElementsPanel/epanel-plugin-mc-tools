@@ -1,18 +1,25 @@
 import type { McToolsDaemonContext } from "../context";
 import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight } from "../../../../shared/map";
 import { WorldMapService } from "./service";
+import { MapPlayerService } from "./players";
+import { MAP_PLAYERS_EVENT, MAP_RCON_ENABLE_EVENT } from "../../../../shared/map-players";
 
 export function registerWorldMap(ctx: McToolsDaemonContext) {
   const service = new WorldMapService(ctx.instances.subsystem);
+  const players = new MapPlayerService(ctx.instances.subsystem, id => service.worlds(id));
   ctx.features.add("mcWorldMap");
-  ctx.on("dispose", () => service.dispose());
-  for (const event of [MAP_WORLDS_EVENT, MAP_TILE_EVENT, MAP_SCENE_EVENT]) {
+  ctx.on("dispose", () => { players.dispose(); return service.dispose(); });
+  for (const event of [MAP_WORLDS_EVENT, MAP_TILE_EVENT, MAP_SCENE_EVENT, MAP_PLAYERS_EVENT, MAP_RCON_ENABLE_EVENT]) {
     ctx.protocol.on(event, async (request, value) => {
       try {
         if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("MC_MAP_INVALID");
         const data = value as Record<string, unknown>;
         if (typeof data.instanceUuid !== "string" || !data.instanceUuid || data.instanceUuid.length > 128) throw new Error("MC_MAP_INVALID");
-        if (event === MAP_WORLDS_EVENT) {
+        if (event === MAP_RCON_ENABLE_EVENT) ctx.protocol.response(request, await players.enable(data.instanceUuid, data.confirmed));
+        else if (event === MAP_PLAYERS_EVENT) {
+          if (data.world !== undefined && (typeof data.world !== "string" || !/^[a-f0-9]{24}$/.test(data.world))) throw new Error("MC_MAP_INVALID");
+          ctx.protocol.response(request, await players.list(data.instanceUuid, data.world as string | undefined));
+        } else if (event === MAP_WORLDS_EVENT) {
           const worlds = await service.worlds(data.instanceUuid, data.refresh === true);
           ctx.protocol.response(request, worlds.map(({ id, name, dimension, spawn }) => ({ id, name, dimension, spawn })));
         } else {

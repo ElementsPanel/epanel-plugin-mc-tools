@@ -64,12 +64,12 @@ function overview(t, options = {}) {
     dispose() { this.disposed = true; }
   }
   const context = target => ({
-    setTransform(...matrix) { this.matrix = matrix; }, clearRect() {}, fillRect() {}, beginPath() {}, arc() {}, stroke() {}, moveTo() {}, lineTo() {},
+    setTransform(...matrix) { this.matrix = matrix; }, clearRect() {}, fillRect() {}, beginPath() {}, arc() {}, stroke() { draws.push({ marker: true, target }); }, moveTo() {}, lineTo() {},
     drawImage(image, ...bounds) {
       assert(!image.webgl, "WebGL pixels must reach the compositor directly, without a 2D canvas copy");
       draws.push({ image, bounds, target });
     },
-    fill() { draws.push({ marker: true, target }); }
+    fill() {}
   });
   const createCanvas = () => {
     const layer = { width: 0, height: 0, style: {}, attributes: {},

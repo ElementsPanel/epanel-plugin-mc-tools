@@ -1,6 +1,7 @@
 import { ctx } from "@elements-panel/sdk";
 import type { MapInstances, MapNode, MapSettings, MapTile, MapSceneTile, MapWorld, PublicMapCatalog, PublicMapLinks } from "../../../shared/map";
 import { t } from "../settings";
+import type { EnableRconResult, MapPlayerRoster } from "../../../shared/map-players";
 
 export function mapError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -19,13 +20,13 @@ function authenticatedRequests() {
     })().catch((error) => { authentication = undefined; throw error; });
     return authentication;
   }
-  async function request<T>(route: string, values: Record<string, string>, signal: AbortSignal, body?: unknown): Promise<T> {
+  async function request<T>(route: string, values: Record<string, string>, signal: AbortSignal, body?: unknown, method = "PUT"): Promise<T> {
     const headers = { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${await token(signal)}`,
       ...(body === undefined ? {} : { "Content-Type": "application/json" }) };
     const query = new URLSearchParams(values);
     const response = await fetch(`./api/mc-tools/map/${route}?${query}`, {
       credentials: "same-origin", headers, signal, cache: "no-store",
-      ...(body === undefined ? {} : { method: "PUT", body: JSON.stringify(body) })
+      ...(body === undefined ? {} : { method, body: JSON.stringify(body) })
     });
     const result = await response.json();
     if (!response.ok || result.status !== 200) {
@@ -40,6 +41,8 @@ export function worldMapApi(instanceUuid: string, daemonId: string) {
   const api = authenticatedRequests();
   const scope = { uuid: instanceUuid, daemonId };
   return {
+    players: (signal: AbortSignal) => api.request<MapPlayerRoster>("players", scope, signal),
+    enableRcon: (signal: AbortSignal) => api.request<EnableRconResult>("rcon/enable", scope, signal, { confirmed: true }, "POST"),
     publicLinks: (signal: AbortSignal) => api.request<PublicMapLinks>("public/links", scope, signal),
     worlds: (signal: AbortSignal, refresh = false) => {
       if (refresh) api.reset();
@@ -80,6 +83,7 @@ export const publicMapCatalog = (signal: AbortSignal) => publicRequest<PublicMap
 
 export function publicWorldMapApi(map: string) {
   return {
+    players: (signal: AbortSignal) => publicRequest<MapPlayerRoster>("players", { map }, signal),
     worlds: (signal: AbortSignal, refresh = false) => publicRequest<MapWorld[]>("worlds", { map, refresh: refresh ? "1" : "0" }, signal),
     scene: (_world: string, x: number, z: number, signal: AbortSignal, y?: number) => publicRequest<MapSceneTile>("scene", {
       map, x: String(x), z: String(z), ...(y === undefined ? {} : { y: String(y) })

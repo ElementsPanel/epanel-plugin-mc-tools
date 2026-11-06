@@ -21,6 +21,7 @@ function component(name, overrides = {}) {
     if (id === "../settings") return { t: key => key };
     if (id === "../../../shared/map") return loader()("shared/map.ts");
     if (id === "./page") return loader()("panel/src/map/page.ts");
+    if (id === "./player-state" || id === "./player-markers") return loader({ "../settings": { t: key => key } })("panel/src/map/" + id.slice(2) + ".ts");
     return require(id);
   };
   mod._compile(transformSync(script.content, { loader: "ts", format: "cjs" }).code, filename);
@@ -119,6 +120,28 @@ function sceneViewer(t, options = {}) {
   f.view.canvas = {};
   return { ...f, renderers, views, scene, tile };
 }
+
+test("choosing a player switches to their world, centers fractional coordinates and updates markers", async t => {
+  const renderers = [], worlds = [terrain(), { ...terrain(otherWorld), dimension: "minecraft:the_nether" }];
+  const player = { name: "Alex", position: { x: -163.5, y: 70, z: -92.25, world: otherWorld, dimension: "minecraft:the_nether", yaw: 90 } };
+  const f = mount(t, component("WorldMapView.vue", {
+    "./api": { mapError: error => error.message, worldMapApi: () => ({ worlds: async () => worlds, tile() {},
+      players: async () => ({ edition: "java", running: true, rconEnabled: true, players: [player], warnings: [] }) }) },
+    "./viewport": { MapViewport: class {
+      constructor(_canvas, world, _tile, changed) { this.camera = { ...world.spawn, zoom: 2 }; this.world = world.id; this.changed = changed; renderers.push(this); }
+      setMode() {} setLayer(y) { this.layer = y; } dispose() { this.disposed = true; }
+      project(point) { return { x: point.x - this.camera.x + 400, y: point.z - this.camera.z + 300 }; }
+      center(x, z) { Object.assign(this.camera, { x, z }); this.changed(this.camera); }
+    } }
+  }), { instanceUuid: "server", daemonId: "node", initialView: { y: 0 } });
+  f.view.canvas = {}; await tick(); assert.deepEqual(f.view.markers, []);
+  f.view.locatePlayer(player); await tick();
+  const current = renderers.at(-1);
+  assert.equal(current.world, otherWorld); assert.equal(renderers[0].disposed, true);
+  assert.equal(current.camera.x, -163.5); assert.equal(current.camera.z, -92.25);
+  assert.equal(f.view.height, 71); assert.equal(f.view.markers[0].x, 400); assert.equal(f.view.markers[0].y, 300);
+  current.center(-150, -80); assert.equal(f.view.markers[0].x, 386.5);
+});
 
 test("shared views pass both map APIs to one persistent viewport and retain coordinates, zoom and slices across projection switches", async t => {
   const f = sceneViewer(t, { render: "3d" }); await tick();

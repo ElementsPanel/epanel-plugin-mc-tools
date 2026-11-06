@@ -99,6 +99,22 @@ function routesFixture() {
   };
 }
 
+test("public player reads are scoped to the published world and aliases, and revocation during a read hides results", async () => {
+  const f = routesFixture(); f.configure({ mapPageEnabled: true });
+  f.respond(async () => ({ edition: "java", running: true, rconEnabled: true, warnings: [], players: [
+    { name: "Steve", position: { x: 1, y: 64, z: 2, world, dimension: "minecraft:overworld" } },
+    { name: "Alex", position: { x: 5, y: 64, z: 6, world: hiddenWorld, dimension: "minecraft:the_nether" } }, { name: "Unknown" }
+  ] }));
+  const result = (await f.request("/players", { map: "survival", uuid: "injected", world: hiddenWorld, daemonId: "injected" })).body;
+  assert.deepEqual(result.players.map(player => player.name), ["Steve"]);
+  assert.equal(result.players[0].position.world, "survival");
+  assert.deepEqual(f.calls[0], { event: "mc-tools/map/players", data: { instanceUuid: "server", world } });
+  const gate = deferred(); f.respond(() => gate.promise);
+  const read = f.request("/players", { map: "survival" });
+  f.configure({ mapPageEnabled: false }); gate.resolve(result);
+  assert.equal((await read).body.message, "MC_MAP_PAGE_DISABLED");
+});
+
 test("anonymous map routes reveal only configured aliases and use the configured instance and dimension regardless of injected parameters", async () => {
   const f = routesFixture();
   assert.deepEqual((await f.request("/maps")).body, { enabled: false, maps: [] });

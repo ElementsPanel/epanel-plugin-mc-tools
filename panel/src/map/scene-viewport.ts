@@ -1,4 +1,4 @@
-import { BufferAttribute, Color, Group, InstancedBufferAttribute, InstancedBufferGeometry, Matrix4, Mesh, MeshBasicMaterial, OctahedronGeometry, OrthographicCamera, PerspectiveCamera, Scene, Sphere, Vector3, WebGLRenderer } from "three";
+import { BufferAttribute, Color, Group, InstancedBufferAttribute, InstancedBufferGeometry, Matrix4, Mesh, MOUSE, OrthographicCamera, PerspectiveCamera, Scene, Sphere, TOUCH, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y, MAP_SCENE_SIZE, mapHeight, type MapSceneTile, type MapWorld } from "../../../shared/map";
 import type { Camera, MapRenderer, MapViewState } from "./viewport";
@@ -7,6 +7,7 @@ import { sceneMaterials } from "./scene-materials";
 import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjection } from "./perspective-transition";
 import { SceneKind } from "../../../shared/scene";
 import { sortTransparentFaces } from "./scene-transparency";
+import { keyboardPan } from "./navigation";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
 const tileKey = (x: number, z: number, y?: number) => `${y ?? "surface"}:${x}:${z}`;
@@ -45,7 +46,6 @@ export class SceneViewport implements MapRenderer {
   private readonly controls: OrbitControls;
   private readonly materials: ReturnType<typeof sceneMaterials>;
   private readonly observer: ResizeObserver;
-  private readonly marker = new Mesh(new OctahedronGeometry(0.9), new MeshBasicMaterial({ color: 0xffd56a }));
   private readonly abort = new AbortController();
   private readonly cache = new Map<string, SceneTile>();
   private readonly displayed = new Map<string, SceneTile>();
@@ -67,7 +67,20 @@ export class SceneViewport implements MapRenderer {
   private orbit = { polar: Math.acos(1 / Math.sqrt(3)), azimuth: Math.PI / 4 };
   private transition?: { from: number; to: number; startedAt: number };
   private readonly sky: Color;
+  private playerProjection?: Matrix4;
   private readonly reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  project(position: { x: number; y: number; z: number }) {
+    if (!this.playerProjection) return;
+    const point = new Vector3(position.x - this.origin.x, position.y, position.z - this.origin.z).applyMatrix4(this.playerProjection);
+    if (!point.toArray().every(Number.isFinite) || point.z < -1 || point.z > 1) return;
+    return { x: (point.x + 1) * this.width / 2, y: (1 - point.y) * this.height / 2 };
+  }
+
+  projectSpawn() {
+    const height = this.elevation(this.world.spawn.x, this.world.spawn.z);
+    return height === undefined ? undefined : this.project({ ...this.world.spawn, y: height + 3.5 });
+  }
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -86,11 +99,13 @@ export class SceneViewport implements MapRenderer {
     const sky = nether ? 0x482728 : end ? 0x242036 : 0xbad8f3;
     this.sky = new Color(sky);
     this.materials = sceneMaterials(sky, nether, () => { this.atlasReady = true; this.schedule(); }, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
-    this.scene.add(this.marker);
     this.origin = { x: Math.floor(world.spawn.x / SIZE) * SIZE, z: Math.floor(world.spawn.z / SIZE) * SIZE };
     const target = new Vector3(world.spawn.x - this.origin.x, Math.min(sliceY ?? 64, 64) + 2, world.spawn.z - this.origin.z);
     this.viewCamera.position.copy(target).add(new Vector3(46, 46, 46).setLength(80));
     this.controls = new OrbitControls(this.viewCamera, inputCanvas);
+    this.controls.mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+    this.controls.touches = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
+    this.controls.keyPanSpeed = 16;
     this.controls.target.copy(target);
     this.controls.minDistance = 160 / 12; this.controls.maxDistance = 160;
     this.controls.minPolarAngle = 0.08; this.controls.maxPolarAngle = Math.PI / 2 - 0.08;
@@ -98,7 +113,6 @@ export class SceneViewport implements MapRenderer {
     this.controls.enableDamping = !this.reducedMotion; this.controls.dampingFactor = 0.16;
     this.controls.rotateSpeed = 0.65; this.controls.panSpeed = 0.85;
     this.controls.enabled = !this.topDown;
-    this.controls.listenToKeyEvents(inputCanvas);
     this.controls.addEventListener("change", this.schedule);
     this.camera.x = world.spawn.x; this.camera.z = world.spawn.z;
     Object.defineProperty(this.camera, "zoom", { enumerable: true,
@@ -108,6 +122,7 @@ export class SceneViewport implements MapRenderer {
     this.controls.update();
     this.updateClipping();
     inputCanvas.addEventListener("pointerdown", this.focus);
+    inputCanvas.addEventListener("keydown", this.keydown);
     canvas.addEventListener("webglcontextlost", this.contextLost);
     this.observer = new ResizeObserver(this.resize);
     if (inputCanvas === canvas) { this.observer.observe(canvas); this.resize(); }
@@ -126,7 +141,7 @@ export class SceneViewport implements MapRenderer {
     const damping = this.controls.enableDamping;
     this.controls.enableDamping = false; this.controls.update(); this.controls.enableDamping = damping;
     this.viewCamera.position.copy(position); this.controls.target.copy(target); this.viewCamera.quaternion.copy(rotation);
-    this.controls.disconnect(); this.controls.connect(this.inputCanvas); this.controls.listenToKeyEvents(this.inputCanvas);
+    this.controls.disconnect(); this.controls.connect(this.inputCanvas);
     this.camera.x = clamp(target.x + this.origin.x); this.camera.z = clamp(target.z + this.origin.z);
     if (!this.topDown && !this.transition) {
       this.topZoom = this.camera.zoom;
@@ -188,12 +203,13 @@ export class SceneViewport implements MapRenderer {
     clearTimeout(this.animationTimer);
     this.observer.disconnect(); this.controls.removeEventListener("change", this.schedule); this.controls.dispose();
     this.inputCanvas.removeEventListener("pointerdown", this.focus);
+    this.inputCanvas.removeEventListener("keydown", this.keydown);
     this.canvas.removeEventListener("webglcontextlost", this.contextLost);
     for (const tile of [...this.cache.values()]) this.remove(tile);
     this.displayed.clear(); this.pending.clear(); this.failed.clear(); this.skipped.clear();
     this.materials[0].uniforms.uAtlas.value.dispose(); this.materials[0].uniforms.uAnimation.value.dispose();
     for (const material of this.materials) material.dispose();
-    this.marker.geometry.dispose(); this.marker.material.dispose(); this.scene.clear();
+    this.scene.clear();
     this.renderer.dispose(); this.renderer.forceContextLoss();
   }
 
@@ -211,6 +227,14 @@ export class SceneViewport implements MapRenderer {
   }
 
   private focus = () => { if (!this.topDown) this.inputCanvas.focus({ preventScroll: true }); };
+  private keydown = (event: KeyboardEvent) => {
+    if (this.topDown || this.transition || !this.active || this.lost || !this.controls.enabled || this.abort.signal.aborted) return;
+    const direction = keyboardPan(event);
+    if (!direction) return;
+    event.preventDefault();
+    this.controls.pan(-direction[0] * this.controls.keyPanSpeed, -direction[1] * this.controls.keyPanSpeed);
+    this.schedule();
+  };
   private contextLost = (event: Event) => {
     event.preventDefault(); this.lost = true; cancelAnimationFrame(this.frame); this.frame = 0;
     clearTimeout(this.animationTimer);
@@ -290,12 +314,8 @@ export class SceneViewport implements MapRenderer {
       this.controls.target.y += delta; this.viewCamera.position.y += delta;
       settling = Math.abs(remaining) >= 0.05 && !this.reducedMotion;
     }
-    const spawn = this.elevation(this.world.spawn.x, this.world.spawn.z);
-    this.marker.visible = spawn !== undefined && !this.transition && !this.topDown;
-    if (spawn !== undefined) this.marker.position.set(this.world.spawn.x - this.origin.x + 0.5, spawn + 3.5, this.world.spawn.z - this.origin.z + 0.5);
     this.materials[0].uniforms.uTime.value = performance.now() / 1000;
     const transitioning = this.advanceTransition();
-    this.marker.visible = spawn !== undefined && !this.transition && !this.topDown;
     const orthographic = this.topDown && !this.transition;
     this.scene.background = orthographic ? null : this.sky;
     const fogScale = this.blend === 1 ? 1 : 1 / Math.max(.0001, this.blend ** 8);
@@ -311,6 +331,7 @@ export class SceneViewport implements MapRenderer {
     }
     const activeCamera = orthographic ? this.topCamera : this.viewCamera;
     activeCamera.updateMatrixWorld(); this.scene.updateMatrixWorld();
+    this.playerProjection = new Matrix4().multiplyMatrices(activeCamera.projectionMatrix, activeCamera.matrixWorldInverse);
     const transform = new Matrix4();
     for (const tile of this.displayed.values()) for (const child of tile.group.children) {
       const mesh = child as Mesh<InstancedBufferGeometry>;

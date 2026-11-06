@@ -1,6 +1,7 @@
 import type { Context } from "cordis";
 import { MAP_TILE_EVENT, MAP_WORLDS_EVENT, MAP_SCENE_EVENT, mapCoordinate, mapSceneCoordinate, mapHeight } from "../../../shared/map";
 import { registerPlayerRoutes } from "./players";
+import { registerMapPlayerRoutes } from "./map-players";
 import { registerMapSettings, type MapSettingsContext } from "./settings";
 import { localeMessages } from "../i18n";
 import { registerPublicMapRoutes, type PublicMapContext } from "./public-map";
@@ -29,6 +30,7 @@ export async function apply(ctx: PublicMapContext & MapEditorContext & MapSettin
   registerPublicMapRoutes(ctx, settings.read);
   registerMapEditorRoutes(ctx, settings);
   registerPlayerRoutes(ctx);
+  registerMapPlayerRoutes(ctx);
 }
 
 export function registerWorldMapRoutes(ctx: MapPanelContext) {

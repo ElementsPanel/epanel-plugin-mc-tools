@@ -1,5 +1,6 @@
 import { MAP_LIMIT, MAP_TILE_SIZE, mapHeight, type MapTile, type MapWorld, type MapSceneTile } from "../../../shared/map";
 import { loadSceneViewport } from "./scene-loader";
+import { keyboardPan } from "./navigation";
 
 export interface Camera { x: number; z: number; zoom: number }
 export interface MapViewState { x: number; z: number; zoom: number; loading: number; warnings: number; error?: unknown; limited?: boolean; empty?: boolean }
@@ -84,6 +85,17 @@ export class MapViewport {
   private zoomAnimation?: ZoomAnimation;
   private readonly reducedMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : undefined;
 
+  project(position: { x: number; y: number; z: number }) {
+    const point = this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible ? this.detail?.project(position)
+      : { x: (position.x - this.camera.x) * this.camera.zoom + this.width / 2, y: (position.z - this.camera.z) * this.camera.zoom + this.height / 2 };
+    return point && point.x >= -32 && point.y >= -32 && point.x <= this.width + 32 && point.y <= this.height + 32 ? point : undefined;
+  }
+
+  projectSpawn() {
+    if (this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible) return this.detail?.projectSpawn();
+    return this.project({ ...this.world.spawn, y: 0 });
+  }
+
   constructor(
     private readonly canvas: HTMLCanvasElement,
     world: MapWorld,
@@ -102,6 +114,8 @@ export class MapViewport {
     canvas.addEventListener("pointercancel", this.up);
     canvas.addEventListener("lostpointercapture", this.up);
     canvas.addEventListener("wheel", this.wheel, { passive: false });
+    canvas.addEventListener("keydown", this.keydown);
+    canvas.addEventListener("contextmenu", this.contextMenu);
     this.observer = new ResizeObserver(entries => this.resize(entries.find(entry => entry.target === canvas)?.contentRect));
     this.observer.observe(canvas);
     this.resize();
@@ -151,7 +165,7 @@ export class MapViewport {
     this.frame = 0;
     this.zoomAnimation = undefined;
     this.clearPointers();
-    for (const [name, callback] of [["pointerdown", this.down], ["pointermove", this.move], ["pointerup", this.up], ["pointercancel", this.up], ["lostpointercapture", this.up], ["wheel", this.wheel]] as const) {
+    for (const [name, callback] of [["pointerdown", this.down], ["pointermove", this.move], ["pointerup", this.up], ["pointercancel", this.up], ["lostpointercapture", this.up], ["wheel", this.wheel], ["keydown", this.keydown], ["contextmenu", this.contextMenu]] as const) {
       this.canvas.removeEventListener(name, callback as EventListener);
     }
     this.cache.clear();
@@ -214,12 +228,22 @@ export class MapViewport {
   }
 
   private down = (event: PointerEvent) => {
-    if (event.button !== 0 || this.mode === "3d" || this.detail?.isTransitioning || this.pointers.size >= 2) return;
+    if (![0, 2].includes(event.button) || this.mode === "3d" || this.detail?.isTransitioning || this.pointers.size >= 2) return;
+    this.canvas.focus?.({ preventScroll: true });
     this.stopZoom();
     this.schedule();
     this.canvas.setPointerCapture(event.pointerId);
     this.pointers.set(event.pointerId, this.pointerPosition(event));
     this.canvas.style.cursor = "grabbing";
+  };
+
+  private contextMenu = (event: Event) => event.preventDefault();
+  private keydown = (event: KeyboardEvent) => {
+    if (this.mode === "3d" || this.detail?.isTransitioning || this.abort.signal.aborted) return;
+    const direction = keyboardPan(event);
+    if (!direction) return;
+    event.preventDefault();
+    this.center(this.camera.x + direction[0] * 16 / this.camera.zoom, this.camera.z + direction[1] * 16 / this.camera.zoom);
   };
 
   private move = (event: PointerEvent) => {
@@ -369,15 +393,6 @@ export class MapViewport {
   }
 
   private drawMarkers(context: CanvasRenderingContext2D) {
-    const spawnX = (this.world.spawn.x - this.camera.x) * this.camera.zoom + this.width / 2;
-    const spawnZ = (this.world.spawn.z - this.camera.z) * this.camera.zoom + this.height / 2;
-    context.fillStyle = "#ffd56a";
-    context.strokeStyle = "#172020";
-    context.lineWidth = 2;
-    context.beginPath();
-    context.arc(spawnX, spawnZ, 6, 0, Math.PI * 2);
-    context.fill();
-    context.stroke();
     context.strokeStyle = "#ffffffbb";
     context.lineWidth = 1;
     context.beginPath();
