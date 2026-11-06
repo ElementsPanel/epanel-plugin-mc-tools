@@ -4,9 +4,11 @@ import { MAP_MAX_PLAYERS, type EnableRconResult, type MapPlayer, type MapPlayerR
 import { consoleLine, onlineParser, type PlayerCommandInstance } from "../players/console";
 import { javaRconConfiguration, enableJavaRcon } from "./rcon-config";
 import { RconConnection, type RconTarget } from "./rcon";
+import { MapPlayerVisibility, type VisibilityStorage } from "./visibility";
 import type { SavedWorld } from "./worlds";
 
 interface Instance extends PlayerCommandInstance {
+  instanceUuid?: string;
   config: { type?: string; pingConfig?: { ip?: string } };
   absoluteCwdPath(): string;
   lock?: boolean;
@@ -96,7 +98,23 @@ export class MapPlayerService {
   private readonly pending = new Map<string, Promise<MapPlayerRoster>>();
   private readonly cache = new Map<string, { at: number; value: MapPlayerRoster }>();
   private readonly sessions = new Map<string, Session>();
-  constructor(private readonly instances: { getInstance(id: string): any }, private readonly worlds: (id: string) => Promise<SavedWorld[]>, private readonly timeout = 8000) {}
+  private readonly visibility: MapPlayerVisibility;
+  private readonly timeout: number;
+  constructor(private readonly instances: { getInstance(id: string): any }, private readonly worlds: (id: string) => Promise<SavedWorld[]>,
+    options: { timeout?: number; storage?: VisibilityStorage } = {}) {
+    this.timeout = options.timeout ?? 8000;
+    this.visibility = new MapPlayerVisibility({
+      changed: id => this.invalidate(id),
+      confirm: (id, name, hidden) => { void this.reply(id, name, hidden); }
+    }, options.storage);
+  }
+
+  /** Listen to chat now, so `$mapos` also works while nobody has the map open. */
+  track(instance: Instance) {
+    const type = instance.config.type || "";
+    if (!instance.instanceUuid || !type.startsWith("minecraft/java") || /bungeecord|velocity/.test(type)) return;
+    this.visibility.track(instance.instanceUuid, instance);
+  }
 
   private instance(id: string) {
     if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
@@ -113,6 +131,29 @@ export class MapPlayerService {
     this.sessions.delete(id);
     session.instance.off("exit", session.onExit);
     session.abort.abort(); session.connection.close();
+  }
+
+  /** A visibility change must show up on the next poll instead of a cached roster. */
+  private invalidate(id: string) {
+    this.revision++;
+    for (const key of this.cache.keys()) if (key.startsWith(id + ":")) this.cache.delete(key);
+  }
+
+  /** Private confirmation for `$mapos`, over RCON when available and the console otherwise. */
+  private async reply(id: string, name: string, hidden: boolean) {
+    const instance = this.instances.getInstance(id) as Instance | undefined;
+    if (!instance) return;
+    const text = hidden ? "地图显示已关闭，输入 $mapos on 可恢复" : "地图显示已开启，输入 $mapos off 可关闭";
+    const command = `tellraw ${name} ${JSON.stringify([{ text: "[MapOS] ", color: "gold" }, { text, color: "gray" }])}`;
+    try {
+      const root = await fs.realpath(instance.absoluteCwdPath());
+      const target = await javaRconConfiguration(root, instance.config.pingConfig?.ip);
+      if (target.enabled && instance.status() === 3) {
+        await this.session(id, instance, root, target).connection.run(send => send(command));
+        return;
+      }
+    } catch { /* No RCON here: the console runs the same command. */ }
+    try { await instance.execPreset("command", command); } catch { /* The player simply stays without a reply. */ }
   }
 
   private session(id: string, instance: Instance, root: string, target: RconTarget) {
@@ -165,6 +206,8 @@ export class MapPlayerService {
   private async read(id: string, instance: Instance): Promise<MapPlayerRoster> {
     const edition = instance.config.type?.startsWith("minecraft/bedrock") ? "bedrock" : "java";
     const roster: MapPlayerRoster = { edition, running: instance.status() === 3, rconEnabled: false, players: [], warnings: [] };
+    // Chat is watched from the first map request, even when RCON stays off.
+    this.visibility.track(id, instance);
     if (edition === "bedrock") { this.closeSession(id); roster.warnings.push("MC_MAP_RCON_UNSUPPORTED"); return roster; }
     let root: string, target: Awaited<ReturnType<typeof javaRconConfiguration>>;
     try {
@@ -188,6 +231,8 @@ export class MapPlayerService {
       delete roster.worldTimes;
       roster.warnings.push(/^MC_MAP_RCON_[A-Z_]+$/.test(message) ? message : "MC_MAP_RCON_UNAVAILABLE");
     } finally { if (session?.connection.closed && this.sessions.get(id) === session) this.closeSession(id); }
+    const names = this.visibility.hiddenPlayers(id);
+    if (names.size) roster.players = roster.players.filter(player => !names.has(player.name.toLowerCase()));
     roster.running = instance.status() === 3;
     if (!roster.running) { roster.players = []; roster.warnings = []; delete roster.worldTimes; }
     if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
@@ -218,5 +263,10 @@ export class MapPlayerService {
     } finally { this.enabling.delete(id); }
   }
 
-  dispose() { this.disposed = true; for (const id of this.sessions.keys()) this.closeSession(id); this.cache.clear(); }
+  dispose() {
+    this.disposed = true;
+    for (const id of this.sessions.keys()) this.closeSession(id);
+    this.cache.clear();
+    this.visibility.dispose();
+  }
 }

@@ -153,10 +153,14 @@ async function fixture(t, text = "# Keep\r\nenable-rcon=false\r\nrcon.port=25576
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "epanel-map-rcon-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const file = path.join(root, "server.properties"); await fs.writeFile(file, text, { mode: 0o640 });
-  const instance = new EventEmitter(), restarts = [], reads = [], connections = [];
+  const instance = new EventEmitter(), restarts = [], reads = [], connections = [], tells = [], consoleCommands = [];
   instance.config = { type: "minecraft/java" }; instance.running = 3;
+  instance.instanceUuid = "server";
   instance.status = () => instance.running; instance.absoluteCwdPath = () => root;
-  instance.execPreset = async name => { restarts.push(name); assert((await javaRconConfiguration(root)).enabled); };
+  instance.execPreset = async (name, parameter) => {
+    if (name === "command") { consoleCommands.push(String(parameter)); return; }
+    restarts.push(name); assert((await javaRconConfiguration(root)).enabled);
+  };
   const worlds = [
     { id: "main", root, directory: path.join(root, "world"), dimension: "minecraft:overworld" },
     { id: "nether", root, directory: path.join(root, "world_nether", "DIM-1"), dimension: "minecraft:the_nether" },
@@ -174,13 +178,15 @@ async function fixture(t, text = "# Keep\r\nenable-rcon=false\r\nrcon.port=25576
         if (command.endsWith(" Dimension")) return 'Steve has the following entity data: "minecraft:overworld"Alex has the following entity data: "minecraft:the_nether"';
         if (command.endsWith(" Rotation")) return "Steve has the following entity data: [0f, 0f]Alex has the following entity data: [0f, 0f]";
         if (command.includes(" time query ")) return "The time is 6000";
+        if (command.startsWith("tellraw ")) { tells.push(command); return ""; }
         throw new Error(command);
       });
     }
   } }, ...overrides })("daemon/src/backend/map/players.ts");
-  const service = new MapPlayerService({ getInstance: () => instance }, async () => worlds);
+  const storage = memoryStorage();
+  const service = new MapPlayerService({ getInstance: () => instance }, async () => worlds, { storage });
   t.after(() => service.dispose());
-  return { root, file, text, instance, restarts, reads, connections, service };
+  return { root, file, text, instance, restarts, reads, connections, tells, consoleCommands, worlds, storage, service };
 }
 
 test("RCON setup does not modify until confirmed, preserves settings, generates a password and restarts once", async t => {
@@ -202,7 +208,7 @@ test("RCON setup does not modify until confirmed, preserves settings, generates 
   assert.deepEqual((await f.service.list("server", "nether")).worldTimes, { nether: 6000 });
   assert.deepEqual((await f.service.list("server", "imported")).worldTimes, {});
   assert.deepEqual((await f.service.list("server", "nether")).players.map(player => player.name), ["Alex"]);
-  assert.equal(f.reads.length, 1); assert.equal(f.instance.listenerCount("exit"), 1);
+  assert.equal(f.reads.length, 1); assert.equal(f.instance.listenerCount("exit"), 2, "the session and the chat tracker both listen for exits");
   assert.equal(f.reads[0].signal.aborted, false);
 });
 
@@ -272,11 +278,11 @@ test("daemon reuses each instance session across refreshes, reconnects closed so
   await Promise.all([f.service.list("server"), f.service.list("server", "nether")]);
   now += 3000; await f.service.list("server");
   assert.equal(f.connections.length, 1); assert.equal(f.reads.length, 2); assert.equal(f.connections[0].closed, false);
-  assert.equal(f.instance.listenerCount("exit"), 1);
+  assert.equal(f.instance.listenerCount("exit"), 2);
   f.connections[0].close(); now += 3000; await f.service.list("server");
-  assert.equal(f.connections.length, 2); assert.equal(f.instance.listenerCount("exit"), 1);
+  assert.equal(f.connections.length, 2); assert.equal(f.instance.listenerCount("exit"), 2);
   f.instance.running = 0; f.instance.emit("exit");
-  assert.equal(f.connections[1].closed, true); assert.equal(f.instance.listenerCount("exit"), 0);
+  assert.equal(f.connections[1].closed, true); assert.equal(f.instance.listenerCount("exit"), 1);
   assert.deepEqual((await f.service.list("server")).players, []);
   f.instance.running = 3; await f.service.list("server");
   assert.equal(f.connections.length, 3); assert.equal(f.connections[2].closed, false);
@@ -296,6 +302,68 @@ test("RCON config changes replace only that instance's connection and disabling 
   await fs.writeFile(f.file, "enable-rcon=false\nrcon.password=after\n");
   now += 3000; assert.equal((await f.service.list("first")).rconEnabled, false);
   assert.equal(f.connections[2].closed, true); assert.equal(f.connections[1].closed, false);
+});
+
+async function until(check) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const value = await Promise.resolve().then(check).catch(() => undefined);
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timeout");
+}
+
+const chat = (text) => `[12:00:00] [Server thread/INFO]: ${text}\r\n`;
+const HIDDEN_KEY = "McToolsMapVisibility/hidden-players";
+const hiddenNames = (storage) => (storage.values.get(HIDDEN_KEY)?.entries ?? []).flatMap((entry) => entry.names);
+
+function memoryStorage() {
+  const values = new Map();
+  return {
+    values,
+    load(category, type, entity) {
+      const raw = values.get(category + "/" + entity);
+      return raw === undefined ? null : Object.assign(new type(), JSON.parse(JSON.stringify(raw)));
+    },
+    store(category, entity, value) { values.set(category + "/" + entity, JSON.parse(JSON.stringify(value))); }
+  };
+}
+
+test("chat visibility commands hide a player from every map and confirm privately over RCON", async (t) => {
+  const f = await fixture(t, "enable-rcon=true\nrcon.password=test\n");
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  const names = async (world) => (await f.service.list("server", world)).players.map((player) => player.name);
+  assert.deepEqual(await names(), ["Steve", "Alex"]);
+  assert.equal(f.instance.listenerCount("data"), 1, "chat is watched as soon as the map is opened");
+  f.service.track(f.instance);
+  assert.equal(f.instance.listenerCount("data"), 1, "tracking twice keeps one listener");
+
+  f.instance.emit("data", chat("<Steve> $mapos off"));
+  await until(() => f.tells.length && f.tells);
+  assert.equal(f.tells[0], 'tellraw Steve [{"text":"[MapOS] ","color":"gold"},{"text":"地图显示已关闭，输入 $mapos on 可恢复","color":"gray"}]');
+  now += 3000;
+  assert.deepEqual(await names(), ["Alex"]);
+  assert.deepEqual(await names("nether"), ["Alex"]);
+  assert.deepEqual(await names("imported"), []);
+  assert.equal((await f.service.list("server")).worldTimes.main, 6000, "hiding keeps the world clock");
+  assert.deepEqual(hiddenNames(f.storage), ["Steve"]);
+
+  f.instance.emit("data", chat("<Steve> $mapos on"));
+  await until(() => f.tells.length === 2 && f.tells);
+  now += 3000;
+  assert.deepEqual(await names(), ["Steve", "Alex"]);
+  assert.deepEqual(hiddenNames(f.storage), []);
+});
+
+test("the confirmation falls back to the console when RCON is not enabled", async (t) => {
+  const f = await fixture(t);
+  await f.service.list("server");
+  assert.equal(f.instance.listenerCount("data"), 1);
+  f.instance.emit("data", chat("[Not Secure] <Alex> $mapos off"));
+  await until(() => f.consoleCommands.length && f.consoleCommands);
+  assert.equal(f.consoleCommands[0], 'tellraw Alex [{"text":"[MapOS] ","color":"gold"},{"text":"地图显示已关闭，输入 $mapos on 可恢复","color":"gray"}]');
+  assert.deepEqual(f.tells, []);
+  assert.deepEqual(hiddenNames(f.storage), ["Alex"]);
 });
 
 test("map player routes enforce login and instance access, and forward only explicit RCON confirmations", async () => {

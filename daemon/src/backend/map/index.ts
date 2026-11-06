@@ -6,7 +6,9 @@ import { MAP_PLAYERS_EVENT, MAP_RCON_ENABLE_EVENT } from "../../../../shared/map
 
 export function registerWorldMap(ctx: McToolsDaemonContext) {
   const service = new WorldMapService(ctx.instances.subsystem);
-  const players = new MapPlayerService(ctx.instances.subsystem, id => service.worlds(id));
+  const players = new MapPlayerService(ctx.instances.subsystem, id => service.worlds(id), { storage: ctx.storage });
+  // Chat only reaches the console, so every Java instance is watched up front.
+  for (const instance of ctx.instances.subsystem.getInstances()) players.track(instance);
   ctx.features.add("mcWorldMap");
   ctx.on("dispose", () => { players.dispose(); return service.dispose(); });
   for (const event of [MAP_WORLDS_EVENT, MAP_TILE_EVENT, MAP_SCENE_EVENT, MAP_PLAYERS_EVENT, MAP_RCON_ENABLE_EVENT]) {

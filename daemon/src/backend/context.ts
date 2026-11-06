@@ -1,6 +1,8 @@
 import type { Context } from "cordis";
 
 export interface MinecraftInstance {
+  /** The identifier the panel and the protocol use for this instance. */
+  instanceUuid?: string;
   config: {
     type?: string;
     pingConfig?: { ip?: string; port?: number; type?: number };
@@ -18,6 +20,8 @@ export interface MinecraftInstance {
   getPreset(name: string): unknown;
   setPreset(name: string, command: unknown): void;
   status(): number;
+  on(event: string, callback: (...args: any[]) => void): unknown;
+  off(event: string, callback: (...args: any[]) => void): unknown;
   lifeCycleTaskManager: {
     lifeCycleTask: MinecraftStatusTask[];
     registerLifeCycleTask(task: MinecraftStatusTask): void;
@@ -50,5 +54,10 @@ export interface McToolsDaemonContext extends Context {
     on(event: string, handler: (request: any, data: unknown) => void): () => void;
     response(request: any, data: unknown): void;
     responseError(request: any, error: Error, options?: { disablePrint: boolean }): void;
+  };
+  /** The host's entity storage; optional so the plugin still runs without it. */
+  storage?: {
+    load<T>(category: string, type: new () => T, entity: string): T | null;
+    store(category: string, entity: string, value: unknown): unknown;
   };
 }

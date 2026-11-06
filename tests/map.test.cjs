@@ -469,7 +469,7 @@ test("daemon map protocol returns public identifiers and hides filesystem errors
   const events = new Map(), disposals = [];
   let response, error;
   const ctx = {
-    instances: { subsystem: { getInstance: (id) => id === "server" ? instance(root) : undefined } },
+    instances: { subsystem: { getInstance: (id) => id === "server" ? instance(root) : undefined, getInstances: () => [] } },
     features: { add(name) { assert.equal(name, "mcWorldMap"); } },
     on(event, callback) { disposals.push(callback); },
     protocol: { on(event, handler) { events.set(event, handler); }, response(request, value) { response = value; }, responseError(request, value) { error = value; } }
@@ -498,4 +498,25 @@ test("daemon map protocol returns public identifiers and hides filesystem errors
   ctx.instances.subsystem.getInstance = () => instance(path.join(root, "nonexistent"));
   await events.get("mc-tools/map/worlds")({}, { instanceUuid: "server" });
   assert.equal(error.message, "MC_MAP_READ_FAILED");
+});
+
+test("registering the map watches chat only on Java instances", async (t) => {
+  const watched = [];
+  const create = (instanceUuid, type) => ({
+    instanceUuid, config: { type }, status: () => 3, absoluteCwdPath: () => os.tmpdir(),
+    on: (event) => watched.push([instanceUuid, event]), off() {}
+  });
+  const disposals = [];
+  const ctx = {
+    instances: { subsystem: {
+      getInstance: () => undefined,
+      getInstances: () => [create("server", "minecraft/java"), create("proxy", "minecraft/java/bungeecord"), create("bedrock", "minecraft/bedrock")]
+    } },
+    features: { add() {} },
+    on(event, callback) { disposals.push(callback); },
+    protocol: { on() {}, response() {}, responseError() {} }
+  };
+  load("daemon/src/backend/map/index.ts").registerWorldMap(ctx);
+  assert.deepEqual(watched, [["server", "data"], ["server", "exit"]], "proxies and Bedrock have no map players to hide");
+  t.after(async () => { for (const callback of disposals) await callback(); });
 });

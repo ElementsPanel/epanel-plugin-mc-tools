@@ -230,7 +230,6 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
             <VBtn variant="text" :disabled="!current" @click="spawn">{{ t("MC_MAP_SPAWN") }}</VBtn>
             <VBtn variant="text" :loading="loading" @click="load(true)">{{ t("MC_MAP_REFRESH") }}</VBtn>
           </div>
-          <p v-if="renderMode === '3d'" class="mc-map-input-hint">{{ t("MC_MAP_3D_HINT") }}</p>
         </VCard>
       </VMenu>
       <template v-if="current && !loading">
@@ -258,7 +257,6 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px; }
 .mc-map-coordinates { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; }
 .mc-map-coordinates :deep(.v-input) { min-width: 60px; flex: 1; }
-.mc-map-input-hint { margin: -4px 12px 12px; font-size: 12px; opacity: 0.75; }
 .mc-map-surface { position: relative; flex: 1; min-height: 280px; background: #19252a; overflow: hidden; }
 .mc-map-surface canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; cursor: grab; touch-action: none; }
 .mc-map-progress { position: absolute; inset: 0 0 auto; z-index: 2; }
