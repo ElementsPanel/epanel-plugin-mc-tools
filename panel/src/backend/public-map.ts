@@ -33,7 +33,13 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
 
   router.get("/maps", noStore, (request: any) => {
     const config = settings();
-    request.body = { enabled: config.mapPageEnabled, maps: config.mapPageEnabled ? config.publicMaps.map(({ id, name }) => ({ id, name })) : [] };
+    // The allowlist is only handed out with the page that needs it, and never
+    // while the public map page is disabled.
+    request.body = {
+      enabled: config.mapPageEnabled,
+      maps: config.mapPageEnabled ? config.publicMaps.map(({ id, name }) => ({ id, name })) : [],
+      embedOrigins: config.mapPageEnabled ? [...config.embedOrigins] : []
+    };
   });
 
   // Only an authorized instance viewer can look up private world IDs or copy a source.

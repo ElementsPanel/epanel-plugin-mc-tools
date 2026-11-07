@@ -43,8 +43,10 @@ export function registerMapEditorRoutes(ctx: MapEditorContext, settings: Setting
     if (!node?.available) throw new Error("MC_MAP_NODE_OFFLINE");
     return new ctx.remote.Request(node);
   };
-  router.get("/settings", admin, handler(() => settings.read()));
-  router.put("/settings", admin, handler(async (request) => settings.write(request.request.body, async (next) => {
+  // The editor only owns the allowlist; embed origins live in the plugin form.
+  const editorView = (value: { mapPageEnabled: boolean; publicMaps: unknown[] }) => ({ mapPageEnabled: value.mapPageEnabled, publicMaps: value.publicMaps });
+  router.get("/settings", admin, handler(() => editorView(settings.read())));
+  router.put("/settings", admin, handler(async (request) => editorView(await settings.write(request.request.body, async (next) => {
     check(request);
     const existing = new Set(settings.read().publicMaps.map((map) => map.source));
     const worlds = new Map<string, MapWorld[]>();
@@ -61,7 +63,7 @@ export function registerMapEditorRoutes(ctx: MapEditorContext, settings: Setting
       if (!worlds.get(key)!.some((world) => world.id === source.world)) throw new Error("MC_MAP_WORLD_MISSING");
     }
     check(request);
-  })));
+  }))));
   router.get("/nodes", admin, handler(() => Array.from(ctx.remote.services.services, ([id, node]) => ({
     id, name: node.config.remarks || id, available: node.available
   }))));

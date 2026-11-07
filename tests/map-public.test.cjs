@@ -23,7 +23,7 @@ async function configuration(stored = null) {
 
 test("public map configuration defaults closed, declares the plugin form, persists an explicit allowlist, and applies only successful saves", async () => {
   const f = await configuration();
-  assert.deepEqual(f.read(), { mapPageEnabled: false, publicMaps: [] });
+  assert.deepEqual(f.read(), { mapPageEnabled: false, publicMaps: [], embedOrigins: [] });
   assert.equal(f.writes.length, 0);
   const fields = f.declaration.fields();
   assert.equal(fields.find(field => field.key === "mapPageEnabled").type, "boolean");
@@ -36,7 +36,7 @@ test("public map configuration defaults closed, declares the plugin form, persis
   assert.equal(f.writes[0].category, "McToolsSettings");
   const restored = await load("panel/src/backend/settings.ts").registerMapSettings(f.ctx);
   assert.deepEqual(restored.read(), saved);
-  assert.deepEqual(f.declaration.read(), { mapPageEnabled: true });
+  assert.deepEqual(f.declaration.read(), { mapPageEnabled: true, embedOrigins: "" });
   await assert.rejects(f.declaration.write({ publicMaps: [] }), /MC_MAP_PAGE_SETTINGS_INVALID/);
   saved.publicMaps[0].source = `other/server/${hiddenWorld}`;
   assert.equal(f.read().publicMaps[0].source, entry().source);
@@ -55,17 +55,17 @@ test("public map settings reject malformed sources, duplicate aliases and invali
     ...[" ", "line\nbreak", "x".repeat(101)].map(name => ({ publicMaps: [{ ...entry(), name }] }))
   ];
   for (const values of invalid) await assert.rejects(f.write(values), /MC_MAP_PAGE_SETTINGS_INVALID/);
-  assert.deepEqual(f.read(), { mapPageEnabled: true, publicMaps: [entry()] });
+  assert.deepEqual(f.read(), { mapPageEnabled: true, publicMaps: [entry()], embedOrigins: [] });
   assert.equal(f.writes.length, 0);
   await f.declaration.write({ mapPageEnabled: false });
-  assert.deepEqual(f.read(), { mapPageEnabled: false, publicMaps: [entry()] });
+  assert.deepEqual(f.read(), { mapPageEnabled: false, publicMaps: [entry()], embedOrigins: [] });
   const damaged = await configuration({ mapPageEnabled: true, publicMaps: [{ ...entry(), source: "../outside" }] });
-  assert.deepEqual(damaged.read(), { mapPageEnabled: false, publicMaps: [] });
+  assert.deepEqual(damaged.read(), { mapPageEnabled: false, publicMaps: [], embedOrigins: [] });
 });
 
 function routesFixture() {
   const routes = new Map(), calls = [], checks = [];
-  let config = { mapPageEnabled: false, publicMaps: [entry()] };
+  let config = { mapPageEnabled: false, publicMaps: [entry()], embedOrigins: [] };
   let respond = async event => event.endsWith("worlds") ? [
     { id: world, name: "Private server name", dimension: "minecraft:overworld", spawn: { x: 8, z: -16, private: "secret" }, root: "/private/save" },
     { id: hiddenWorld, name: "Unlisted world", dimension: "minecraft:the_nether", spawn: { x: 0, z: 0 } }
@@ -119,11 +119,11 @@ test("public player reads are scoped to the published world and aliases, and rev
 
 test("anonymous map routes reveal only configured aliases and use the configured instance and dimension regardless of injected parameters", async () => {
   const f = routesFixture();
-  assert.deepEqual((await f.request("/maps")).body, { enabled: false, maps: [] });
+  assert.deepEqual((await f.request("/maps")).body, { enabled: false, maps: [], embedOrigins: [] });
   assert.equal((await f.request("/worlds", { map: "survival" })).body.message, "MC_MAP_PAGE_DISABLED");
   assert.equal(f.calls.length, 0);
   f.configure({ mapPageEnabled: true });
-  assert.deepEqual((await f.request("/maps")).body, { enabled: true, maps: [{ id: "survival", name: "Survival" }] });
+  assert.deepEqual((await f.request("/maps")).body, { enabled: true, maps: [{ id: "survival", name: "Survival" }], embedOrigins: [] });
   const injected = { map: "survival", daemonId: "other", uuid: "other", world: hiddenWorld, path: "/etc/passwd" };
   assert.deepEqual((await f.request("/worlds", injected)).body, [
     { id: "survival", name: "Survival", dimension: "minecraft:overworld", spawn: { x: 8, z: -16 } }
@@ -183,7 +183,7 @@ test("the host form and instance map editor serialize writes without overwriting
   assert.equal(f.writes.length, 0);
   gate.resolve();
   await Promise.all([first, second]);
-  assert.deepEqual(f.read(), { mapPageEnabled: false, publicMaps: [{ ...entry(), name: "New name" }] });
+  assert.deepEqual(f.read(), { mapPageEnabled: false, publicMaps: [{ ...entry(), name: "New name" }], embedOrigins: [] });
   assert.equal(f.writes.length, 2);
 });
 
@@ -254,7 +254,7 @@ test("saving instance maps verifies new sources, preserves settings on failure, 
   const f = await editorFixture();
   let result = await f.request("put", "/settings", {}, { mapPageEnabled: true, publicMaps: [{ ...entry(), source: `node/server/${hiddenWorld}` }] });
   assert.equal(result.body.message, "MC_MAP_WORLD_MISSING");
-  assert.deepEqual(f.settings.read(), { mapPageEnabled: false, publicMaps: [] });
+  assert.deepEqual(f.settings.read(), { mapPageEnabled: false, publicMaps: [], embedOrigins: [] });
   result = await f.request("put", "/settings", {}, { mapPageEnabled: true, publicMaps: [entry()] });
   assert.deepEqual(result.body, { mapPageEnabled: true, publicMaps: [entry()] });
   assert.deepEqual(f.calls.at(-1), { event: "mc-tools/map/worlds", data: { instanceUuid: "server" } });

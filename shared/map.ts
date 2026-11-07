@@ -26,7 +26,11 @@ export interface MapSettings { mapPageEnabled: boolean; publicMaps: PublicMapSet
 export interface MapNode { id: string; name: string; available: boolean }
 export interface MapInstance { id: string; name: string }
 export interface MapInstances { page: number; maxPage: number; data: MapInstance[]; selected?: MapInstance }
-export interface PublicMapCatalog extends MapPageStatus { maps: PublicMap[] }
+export interface PublicMapCatalog extends MapPageStatus {
+  maps: PublicMap[];
+  /** Origins allowed to drive the embedded map; empty disables the bridge. */
+  embedOrigins?: string[];
+}
 export interface PublicMapLinks extends MapPageStatus {
   canConfigure: boolean;
   maps: (PublicMap & { world: string })[];

@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { MAP_PAGE_PATH, MAP_SETTINGS_PATH, mapSource, parseMapSource, publicMapId, type MapSettings, type PublicMapSetting } from "../../../shared/map";
+import { embedOrigins } from "../../../shared/embed";
 
 export class McToolsSettings {
   mapPageEnabled = false;
   publicMaps: PublicMapSetting[] = [];
+  /** Sites allowed to drive the embedded map through postMessage. */
+  embedOrigins: string[] = [];
 }
 
 export interface MapSettingsContext {
@@ -14,7 +17,7 @@ export interface MapSettingsContext {
   } };
   settingsForm: { declare(value: {
     fields(): Record<string, unknown>[];
-    read(): Pick<McToolsSettings, "mapPageEnabled">;
+    read(): Pick<McToolsSettings, "mapPageEnabled" | "embedOrigins">;
     write(values: Record<string, unknown>): Promise<void>;
   }): unknown };
 }
@@ -39,16 +42,20 @@ export async function registerMapSettings(ctx: MapSettingsContext) {
     return result;
   }
   try {
-    settings = { mapPageEnabled: stored?.mapPageEnabled === true, publicMaps: maps(stored?.publicMaps ?? [], false) };
+    settings = {
+      mapPageEnabled: stored?.mapPageEnabled === true,
+      publicMaps: maps(stored?.publicMaps ?? [], false),
+      embedOrigins: embedOrigins(stored?.embedOrigins)
+    };
   } catch { /* A damaged allowlist must not open unconfigured worlds. */ }
-  const snapshot = () => ({ ...settings, publicMaps: settings.publicMaps.map((item) => ({ ...item })) });
+  const snapshot = () => ({ ...settings, publicMaps: settings.publicMaps.map((item) => ({ ...item })), embedOrigins: [...settings.embedOrigins] });
   // Both the host form and the map editor use this queue; a failed save cannot
   // replace active settings or block later changes.
   let pending = Promise.resolve();
   const write = (values: Record<string, unknown>, validate?: (next: MapSettings) => Promise<void>) => {
     const save = pending.then(async () => {
       if (!values || typeof values !== "object" || Array.isArray(values) ||
-        Object.keys(values).some((key) => !["mapPageEnabled", "publicMaps"].includes(key)) ||
+        Object.keys(values).some((key) => !["mapPageEnabled", "publicMaps", "embedOrigins"].includes(key)) ||
         (values.mapPageEnabled !== undefined && typeof values.mapPageEnabled !== "boolean")) {
         throw new Error(ctx.i18n.$t("MC_MAP_PAGE_SETTINGS_INVALID"));
       }
@@ -56,9 +63,13 @@ export async function registerMapSettings(ctx: MapSettingsContext) {
       try {
         next = {
           mapPageEnabled: values.mapPageEnabled === undefined ? settings.mapPageEnabled : values.mapPageEnabled as boolean,
-          publicMaps: values.publicMaps === undefined ? snapshot().publicMaps : maps(values.publicMaps, true)
+          publicMaps: values.publicMaps === undefined ? snapshot().publicMaps : maps(values.publicMaps, true),
+          embedOrigins: values.embedOrigins === undefined ? settings.embedOrigins : embedOrigins(values.embedOrigins, true)
         };
-      } catch { throw new Error(ctx.i18n.$t("MC_MAP_PAGE_SETTINGS_INVALID")); }
+      } catch (error) {
+        throw new Error(error instanceof Error && error.message === "MC_MAP_EMBED_INVALID"
+          ? ctx.i18n.$t("MC_MAP_EMBED_INVALID") : ctx.i18n.$t("MC_MAP_PAGE_SETTINGS_INVALID"));
+      }
       if (validate) await validate(next);
       await storage.store("McToolsSettings", "config", next);
       settings = next;
@@ -70,13 +81,14 @@ export async function registerMapSettings(ctx: MapSettingsContext) {
   ctx.settingsForm.declare({
     fields: () => [
       { key: "mapPageEnabled", type: "boolean", title: ctx.i18n.$t("MC_MAP_PAGE_ENABLE"), description: ctx.i18n.$t("MC_MAP_PAGE_ENABLE_HINT") },
+      { key: "embedOrigins", type: "string", title: ctx.i18n.$t("MC_MAP_EMBED"), description: ctx.i18n.$t("MC_MAP_EMBED_HINT") },
       { type: "link", title: ctx.i18n.$t("MC_MAP_MANAGE"), route: MAP_SETTINGS_PATH },
       { type: "link", title: ctx.i18n.$t("MC_MAP_PUBLIC_OPEN"), route: MAP_PAGE_PATH }
     ],
     // The generic form must not resubmit a stale map list after editor changes.
-    read: () => ({ mapPageEnabled: settings.mapPageEnabled }),
+    read: () => ({ mapPageEnabled: settings.mapPageEnabled, embedOrigins: settings.embedOrigins.join("\n") }),
     write: async (values) => {
-      if (!values || Object.keys(values).some((key) => key !== "mapPageEnabled")) {
+      if (!values || Object.keys(values).some((key) => key !== "mapPageEnabled" && key !== "embedOrigins")) {
         throw new Error(ctx.i18n.$t("MC_MAP_PAGE_SETTINGS_INVALID"));
       }
       await write(values);

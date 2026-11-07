@@ -3,8 +3,10 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VAlert } from "vuetify/components";
 import { MAP_PAGE_PATH, type MapViewOptions, type PublicMapCatalog } from "../../../shared/map";
+import { EMBED_QUERY, type EmbedFocus } from "../../../shared/embed";
 import { t } from "../settings";
 import { mapError, publicMapCatalog } from "./api";
+import { createEmbedBridge, embedPort } from "./embed";
 import { mapPageLocation } from "./page";
 import WorldMapView from "./WorldMapView.vue";
 import MapControls from "./MapControls.vue";
@@ -20,6 +22,27 @@ let abort = new AbortController();
 let generation = 0;
 const items = computed(() => catalog.value.maps.map((map) => ({ title: map.name, value: map.id })));
 const picker = computed(() => ({ selected: selected.value, items: items.value, enabled: catalog.value.enabled, loading: loading.value }));
+const isEmbed = computed(() => String(route.query[EMBED_QUERY] ?? "") === "1");
+const mapView = ref<{ focus(target: EmbedFocus): boolean; view(): MapViewOptions } | null>(null);
+const currentView = ref<MapViewOptions>({});
+const announced = ref(false);
+const bridge = createEmbedBridge(embedPort(), {
+  origins: () => catalog.value.embedOrigins ?? [],
+  ready: () => ({ map: selected.value, worlds: catalog.value.maps.map((map) => ({ id: map.id, name: map.name })), embed: isEmbed.value }),
+  view: () => ({
+    map: selected.value, world: selected.value,
+    x: currentView.value.x ?? 0, z: currentView.value.z ?? 0, zoom: currentView.value.zoom ?? 2,
+    render: currentView.value.render === "3d" ? "3d" : "2d"
+  }),
+  focus: (target) => mapView.value?.focus(target) ?? false
+});
+const { markers: injectedMarkers, menu: injectedMenu } = bridge;
+
+function onView(value: MapViewOptions) {
+  currentView.value = value;
+  if (!announced.value) { announced.value = true; bridge.announce(); }
+  bridge.publishView();
+}
 
 async function load() {
   const current = ++generation;
@@ -28,6 +51,9 @@ async function load() {
   loading.value = true;
   selected.value = "";
   error.value = "";
+  announced.value = false;
+  currentView.value = {};
+  bridge.stop();
   try {
     const location = mapPageLocation(route.query);
     const result = await publicMapCatalog(abort.signal);
@@ -44,11 +70,18 @@ async function load() {
 }
 
 function choose(value: string) {
-  if (value !== selected.value) void router.replace({ path: MAP_PAGE_PATH, query: { map: value } });
+  if (value === selected.value) return;
+  // Keep the embed flag so switching maps cannot cut the bridge mid-session.
+  const query = isEmbed.value ? { map: value, [EMBED_QUERY]: "1" } : { map: value };
+  void router.replace({ path: MAP_PAGE_PATH, query });
 }
 
+// The bridge only listens while embedded and while the allowlist is loaded.
+watch([isEmbed, () => catalog.value.embedOrigins, selected], () => {
+  if (isEmbed.value && selected.value && (catalog.value.embedOrigins?.length ?? 0)) bridge.start();
+}, { immediate: true });
 watch(() => route.fullPath, () => void load(), { immediate: true });
-onBeforeUnmount(() => { generation++; abort.abort(); });
+onBeforeUnmount(() => { generation++; abort.abort(); bridge.stop(); });
 </script>
 
 <template>
@@ -60,7 +93,9 @@ onBeforeUnmount(() => { generation++; abort.abort(); });
         <div v-else class="mc-map-page-empty" role="status">{{ t(loading ? "MC_MAP_LOADING" : "MC_MAP_PUBLIC_EMPTY") }}</div>
       </div>
     </template>
-    <WorldMapView v-else :key="route.fullPath" v-model:sidebar-open="sidebarOpen" :public-map="selected" :initial-view="initialView" fullscreen>
+    <WorldMapView v-else ref="mapView" :key="route.fullPath" v-model:sidebar-open="sidebarOpen" :public-map="selected" :initial-view="initialView"
+      :custom-markers="injectedMarkers" :menu-items="injectedMenu" fullscreen
+      @view="onView" @marker="bridge.notifyMarker($event)" @menu="bridge.notifyMenu($event)">
       <template #settings><PublicMapPicker v-bind="picker" @choose="choose" @refresh="load" /></template>
     </WorldMapView>
   </main>

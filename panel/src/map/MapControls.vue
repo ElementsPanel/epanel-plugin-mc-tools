@@ -3,11 +3,11 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VBtn, VCard, VLayout, VList, VListItem, VNavigationDrawer } from "vuetify/components";
 import { t } from "../settings";
 
-const props = withDefaults(defineProps<{ open?: boolean; players?: boolean }>(), { open: undefined });
+const props = withDefaults(defineProps<{ open?: boolean; players?: boolean; menu?: boolean }>(), { open: undefined });
 const emit = defineEmits<{ "update:open": [value: boolean] }>();
 const localOpen = ref(false);
 const opened = computed(() => props.open ?? localOpen.value);
-const page = ref<"worlds" | "players" | undefined>();
+const page = ref<"worlds" | "players" | "menu" | undefined>();
 watch(opened, value => { if (value) page.value = undefined; });
 const controls = ref<HTMLElement>();
 const panelId = `mc-map-sidebar-${Math.random().toString(36).slice(2)}`;
@@ -26,7 +26,7 @@ async function toggle(value: boolean) {
     <VLayout class="mc-map-drawer-layout">
       <VNavigationDrawer :id="panelId" :model-value="opened" class="mc-map-sidebar" location="left" :width="480" rounded="0" absolute temporary floating disable-route-watcher disable-resize-watcher touchless retain-focus capture-focus tag="aside" :aria-label="t('MC_MAP_CONTROLS')" @update:model-value="toggle" @keydown.esc.stop.prevent="toggle(false)">
         <Transition name="mc-map-sidebar-page" mode="out-in">
-          <VCard :key="page ?? 'menu'" :title="t(page === 'worlds' ? 'MC_MAP_WORLDS_MENU' : page === 'players' ? 'MC_MAP_PLAYERS_MENU' : 'MC_MAP_CONTROLS')" class="mc-map-sidebar-card" rounded="0">
+          <VCard :key="page ?? 'root'" :title="t(page === 'worlds' ? 'MC_MAP_WORLDS_MENU' : page === 'players' ? 'MC_MAP_PLAYERS_MENU' : page === 'menu' ? 'MC_MAP_EMBED_MENU' : 'MC_MAP_CONTROLS')" class="mc-map-sidebar-card" rounded="0">
             <template v-if="page" #prepend><VBtn icon="mdi-arrow-left" variant="text" size="small" :aria-label="t('MC_MAP_BACK')" @click="page = undefined" /></template>
             <template #append>
               <VBtn icon="mdi-close" class="mc-map-sidebar-close" variant="text" size="small" :title="t('MC_MAP_CONTROLS_CLOSE')" :aria-label="t('MC_MAP_CONTROLS_CLOSE')" @click="toggle(false)" />
@@ -35,8 +35,10 @@ async function toggle(value: boolean) {
               <VList v-if="!page" nav :aria-label="t('MC_MAP_CONTROLS')">
                 <VListItem :title="t('MC_MAP_WORLDS_MENU')" prepend-icon="mdi-earth" append-icon="mdi-chevron-right" @click="page = 'worlds'" />
                 <VListItem v-if="players" :title="t('MC_MAP_PLAYERS_MENU')" prepend-icon="mdi-account-group" append-icon="mdi-chevron-right" @click="page = 'players'" />
+                <VListItem v-if="menu" :title="t('MC_MAP_EMBED_MENU')" prepend-icon="mdi-format-list-bulleted" append-icon="mdi-chevron-right" @click="page = 'menu'" />
               </VList>
               <slot v-else-if="page === 'players'" name="players" />
+              <slot v-else-if="page === 'menu'" name="menu" />
               <slot v-else />
             </div>
           </VCard>

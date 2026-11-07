@@ -20,6 +20,11 @@ function component(name, overrides = {}) {
     if (id.endsWith(".vue") || id === "vuetify/components") return {};
     if (id === "../settings") return { t: key => key };
     if (id === "../../../shared/map") return loader()("shared/map.ts");
+    if (id === "../../../shared/embed") return loader()("shared/embed.ts");
+    if (id === "./embed") return {
+      embedPort: () => ({ addEventListener() {}, removeEventListener() {}, parent: null }),
+      createEmbedBridge: (port, options) => ({ markers: vue.ref([]), menu: vue.ref([]), start() {}, stop() {}, announce() {}, publishView() {}, notifyMarker() {}, notifyMenu() {}, options })
+    };
     if (id === "./page") return loader()("panel/src/map/page.ts");
     if (id === "./player-state" || id === "./player-markers") return loader({ "../settings": { t: key => key } })("panel/src/map/" + id.slice(2) + ".ts");
     return require(id);
@@ -91,6 +96,8 @@ test("map links preserve a panel subpath and legacy slice links without private 
   assert.deepEqual(mapPageLocation({ y: "0" }).view, {});
   assert.deepEqual(mapPageLocation({ y: "invalid" }).view, {});
   assert.deepEqual(mapPageLocation({}), { map: undefined, view: {} });
+  // The embed flag is read by the page, never by the view parser.
+  assert.deepEqual(mapPageLocation({ map: "survival", embed: "1", x: "10", z: "-20" }), { map: "survival", view: { x: 10, z: -20 } });
   for (const query of [{ map: ["survival"] }, { map: "../secret" }, { x: "1" }, { x: "1.5", z: "0" }, { x: "30000001", z: "0" },
     { zoom: "0.5" }, { zoom: "13" }, { x: "Infinity", z: "0" }, { zoom: "1e1" }]) {
     assert.throws(() => mapPageLocation(query), /MC_MAP_INVALID/);

@@ -4,6 +4,7 @@ import { VAlert, VBtn, VCard, VCardActions, VCardText, VDialog, VIcon, VList, VL
 import type { MapWorld, MapViewOptions } from "../../../shared/map";
 import type { MapPlayer } from "../../../shared/map-players";
 import { MAP_LIMIT } from "../../../shared/map";
+import type { MapMarker, MapMenuItem } from "../../../shared/embed";
 import { t } from "../settings";
 import { mapError, publicWorldMapApi, worldMapApi } from "./api";
 import { MapViewport, type MapViewState } from "./viewport";
@@ -13,8 +14,15 @@ import SpawnMarker from "./SpawnMarker.vue";
 import { useMapPlayers } from "./player-state";
 import { playerMarkers, worldForPlayer } from "./player-markers";
 
-const props = withDefaults(defineProps<{ instanceUuid?: string; daemonId?: string; publicMap?: string; initialView?: MapViewOptions; fullscreen?: boolean; sidebarOpen?: boolean }>(), { sidebarOpen: undefined });
-const emit = defineEmits<{ view: [value: MapViewOptions]; "update:sidebarOpen": [value: boolean] }>();
+const props = withDefaults(defineProps<{
+  instanceUuid?: string; daemonId?: string; publicMap?: string; initialView?: MapViewOptions;
+  fullscreen?: boolean; sidebarOpen?: boolean;
+  /** Pins injected by the embedding page through the postMessage bridge. */
+  customMarkers?: MapMarker[];
+  /** Sidebar entries injected by the embedding page. */
+  menuItems?: MapMenuItem[];
+}>(), { sidebarOpen: undefined, customMarkers: () => [], menuItems: () => [] });
+const emit = defineEmits<{ view: [value: MapViewOptions]; "update:sidebarOpen": [value: boolean]; marker: [id: string]; menu: [id: string] }>();
 const api = props.publicMap ? publicWorldMapApi(props.publicMap) : worldMapApi(props.instanceUuid!, props.daemonId!);
 const { roster, worldTimes, reading: readingPlayers, enabling, prompt: rconPrompt, error: playerError, success: playerSuccess,
   search: playerSearch, players, load: loadPlayers, enable: enableRcon, dismissError: dismissPlayerError } = useMapPlayers(api, mapError);
@@ -45,10 +53,43 @@ let viewport: MapViewport | undefined;
 let nextCenter: { x: number; z: number } | undefined;
 const markers = shallowRef<ReturnType<typeof playerMarkers>>([]);
 const spawnMarker = shallowRef<{ x: number; y: number }>();
+const customPoints = shallowRef<{ id: string; x: number; y: number; icon?: string; color?: string; label?: string }[]>([]);
 function updateMarkers() {
   markers.value = viewport ? playerMarkers(roster.value?.players ?? [], worlds.value, selected.value, point => viewport?.project(point)) : [];
   spawnMarker.value = viewport?.projectSpawn?.();
+  const points = [];
+  for (const marker of props.customMarkers) {
+    // A marker without a world belongs to every world the map can show.
+    if (marker.world && marker.world !== selected.value) continue;
+    const point = viewport?.project({ x: marker.x, y: marker.y ?? 64, z: marker.z });
+    if (point) points.push({ id: marker.id, x: point.x, y: point.y, icon: marker.icon, color: marker.color, label: marker.label });
+  }
+  customPoints.value = points;
 }
+let nextZoom: number | undefined;
+/** Centres the map on a point, optionally switching world, zoom and render mode. */
+function focus(target: { x: number; z: number; world?: string; zoom?: number; render?: "2d" | "3d" }) {
+  const world = target.world ? worlds.value.find((item) => item.id === target.world) : current.value;
+  if (!world || loading.value) return false;
+  const targetX = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, Math.round(target.x)));
+  const targetZ = Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, Math.round(target.z)));
+  x.value = String(targetX); z.value = String(targetZ);
+  if (target.render) renderMode.value = target.render === "3d" ? "3d" : "2d";
+  if (target.zoom !== undefined) {
+    // The viewport of another world is recreated by the watcher, which applies it.
+    nextZoom = target.zoom;
+    if (viewport) viewport.camera.zoom = target.zoom;
+    state.zoom = target.zoom;
+  }
+  if (selected.value !== world.id) { nextCenter = { x: targetX, z: targetZ }; selected.value = world.id; }
+  else if (viewport) { viewport.center(targetX, targetZ); nextZoom = undefined; }
+  return true;
+}
+function chooseMenuItem(item: MapMenuItem) {
+  if (item.x !== undefined && item.z !== undefined) focus({ x: item.x, z: item.z, world: item.world, zoom: item.zoom });
+  emit("menu", item.id);
+}
+defineExpose({ focus, view: () => view(), world: () => selected.value, render: () => renderMode.value });
 function locatePlayer(player: MapPlayer) {
   const world = worldForPlayer(player, worlds.value);
   if (!world || !player.position || loading.value) return;
@@ -142,8 +183,16 @@ function spawn() {
   go();
 }
 
-watch(selected, () => { if (!loading.value) { error.value = ""; void draw(nextCenter); nextCenter = undefined; } }, { flush: "sync" });
+watch(selected, () => {
+  if (loading.value) return;
+  error.value = "";
+  const zoom = nextZoom;
+  nextZoom = undefined;
+  void draw(nextCenter, zoom);
+  nextCenter = undefined;
+}, { flush: "sync" });
 watch([roster, current], updateMarkers);
+watch(() => props.customMarkers, updateMarkers);
 watch(renderMode, value => viewport?.setMode(value));
 watch([() => state.x, () => state.z, () => state.zoom, renderMode], () => emit("view", view()));
 onMounted(() => { void load(); });
@@ -162,7 +211,12 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
         </VCardActions>
       </VCard>
     </VDialog>
-    <MapControls :open="sidebarOpen" players @update:open="emit('update:sidebarOpen', $event)">
+    <MapControls :open="sidebarOpen" players :menu="menuItems.length > 0" @update:open="emit('update:sidebarOpen', $event)">
+      <template #menu>
+        <VList nav :aria-label="t('MC_MAP_EMBED_MENU')">
+          <VListItem v-for="item in menuItems" :key="item.id" :title="item.label" :prepend-icon="item.icon || 'mdi-map-marker-radius'" @click="chooseMenuItem(item)" />
+        </VList>
+      </template>
       <template #players>
         <div class="mc-map-players-toolbar">
           <VTextField v-model="playerSearch" :label="t('MC_MAP_PLAYERS_SEARCH')" hide-details density="compact" variant="outlined" />
@@ -211,6 +265,16 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
           <PlayerAvatar :name="marker.name" :size="28" />
           <span class="mc-map-player-name">{{ marker.name }}</span>
         </div>
+      </div>
+      <div class="mc-map-custom-overlay">
+        <button v-for="point in customPoints" :key="point.id" type="button" class="mc-map-custom-marker"
+          :style="{ left: point.x + 'px', top: point.y + 'px' }" :aria-label="point.label || point.id"
+          :title="point.label || undefined" @click="emit('marker', point.id)" @keydown.enter.prevent="emit('marker', point.id)">
+          <span class="mc-map-custom-pin" :style="{ background: point.color || '#e0533d' }" aria-hidden="true">
+            <VIcon :icon="point.icon || 'mdi-map-marker'" size="15" />
+          </span>
+          <span v-if="point.label" class="mc-map-custom-label">{{ point.label }}</span>
+        </button>
       </div>
       <VMenu v-model="toolsOpen" location="top start" :offset="12" :close-on-content-click="false" :attach="mapRoot" contained>
         <template #activator="{ props: menuProps }">
@@ -265,6 +329,12 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-player-name { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0, 0, 0, 0.5); border-radius: 0; padding: 1px 5px; font-size: 11px; white-space: nowrap; }
 .mc-map-player-facing { position: absolute; inset: 0; }
 .mc-map-player-facing::before { content: ""; position: absolute; left: 9px; top: -12px; border: 5px solid transparent; border-top: 0; border-bottom: 8px solid #fff; }
+/* Pins injected by the embedding page; the overlay stays click-through except the pins. */
+.mc-map-custom-overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.mc-map-custom-marker { position: absolute; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: none; pointer-events: auto; cursor: pointer; color: inherit; }
+.mc-map-custom-marker:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 3px; border-radius: 10px; }
+.mc-map-custom-pin { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: #fff; box-shadow: 0 2px 6px #0006; }
+.mc-map-custom-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 0; font-size: 11px; color: #fff; background: rgba(0, 0, 0, 0.55); }
 .mc-map-players-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px; }
 .mc-map-players-status { padding: 0 16px; font-size: 13px; }
 .mc-map-players-status p { margin: 8px 0; }
