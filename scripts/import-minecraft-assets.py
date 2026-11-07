@@ -24,6 +24,9 @@ import importlib.util
 _spec = importlib.util.spec_from_file_location("sprite_colors", Path(__file__).resolve().parent / "sprite-colors.py")
 sprite_colors = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sprite_colors)
+_spec = importlib.util.spec_from_file_location("cloud_cells", Path(__file__).resolve().parent / "cloud-cells.py")
+cloud_cells = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cloud_cells)
 
 ROOT = Path(__file__).resolve().parent.parent
 DIRECTIONS = ["east", "west", "up", "down", "south", "north"]
@@ -328,6 +331,10 @@ def main(jar, biome_jar=None, biomes_only=False, supplement=None):
         (ROOT / "shared/minecraft-assets.json").write_text(json.dumps(metadata, separators=(",", ":")) + "\n")
         # The flat 2D map reduces each sprite to what the 3D top-down view shows.
         sprite_colors.main(output / "atlas.png", ROOT / "shared/minecraft-assets.json", ROOT / "shared/sprite-colors.json")
+        # The 3D sky extrudes CloudRenderer's cells from the vanilla cloud texture.
+        clouds = "assets/minecraft/textures/environment/clouds.png"
+        clouds_version = json.loads((archive if clouds in base_entries else extra).read("version.json"))["id"]
+        cloud_cells.write(read_bytes(clouds), clouds_version)
         base_blocks = sum("[" not in name for name in blocks)
         provenance = {"minecraftVersion": metadata["version"], "jarSha256": hashlib.sha256(jar.read_bytes()).hexdigest(), "atlasSha256": hashlib.sha256((output / "atlas.png").read_bytes()).hexdigest(), "textures": len(textures) - 1, "frames": len(frames), "blocks": base_blocks, "variants": len(blocks) - base_blocks, **biome_source}
         if supplement:
@@ -335,6 +342,7 @@ def main(jar, biome_jar=None, biomes_only=False, supplement=None):
                 "supplementJarSha256": hashlib.sha256(supplement.read_bytes()).hexdigest(),
                 "supplementBlocks": sum(name.startswith("assets/minecraft/blockstates/") and name.endswith(".json") for name in entries - base_entries)})
         provenance["stateModels"] = sum(len(state["models"]) for state in states.values())
+        provenance["cloudsVersion"] = clouds_version
         (output / "source.json").write_text(json.dumps(provenance, indent=2) + "\n")
         print(json.dumps(provenance, indent=2))
         print("Atlas:", atlas.size)

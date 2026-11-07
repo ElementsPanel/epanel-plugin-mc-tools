@@ -102,7 +102,7 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
   const heights = Buffer.alloc(2048); for (let i = 0; i < 1024; i++) heights.writeInt16LE(64, i * 2);
   const quad = Buffer.alloc(16); quad.writeInt16LE(65, 2); quad.writeUInt16LE(1, 4); quad.writeUInt16LE(1, 6); quad[8] = 2;
   const requests = [], states = [];
-  const view = new SceneViewport(canvas, { id: "world", dimension: "minecraft:overworld", spawn: { x: 8, z: -16 } }, async (world, x, z, signal, y) => {
+  const view = new SceneViewport(canvas, { id: "world", dimension: options.dimension ?? "minecraft:overworld", spawn: { x: 8, z: -16 } }, async (world, x, z, signal, y) => {
     const request = { world, x, z, signal, y }; requests.push(request);
     const result = { version: 1, heights: heights.toString("base64"), quads: quad.toString("base64"), chunks: 1, warnings: 0, limited: false };
     return options.load ? options.load(request, result) : result;
@@ -304,7 +304,8 @@ test("projection changes animate the same scene and retain its meshes, materials
     assert.equal(f.view.renderer, renderer); assert.equal(f.rendered.at(-1).scene, scene);
     assert.equal(f.view.materials, materials); assert.equal(f.view.cache.get(cached.key), cached);
     assert.equal(cached.group.children[0].geometry, geometry);
-    assert(scene.children.every(child => child.isGroup), "no screenshot or second-map transition plane");
+    // Tile groups plus the overworld's own cloud layer, which is part of the sky.
+    assert(scene.children.every(child => child.isGroup || child === f.view.clouds?.mesh), "no screenshot or second-map transition plane");
   };
   f.view.setProjection("perspective"); f.frame(720);
   assert.equal(f.view.controls.enabled, false); assertShared();
@@ -438,4 +439,33 @@ test("orthographic tile coverage reaches all viewport edges at different aspect 
       for (let i = 1; i < tiles.length; i++) assert(distance(tiles[i - 1]) <= distance(tiles[i]));
     }
   }
+});
+
+test("the overworld sky carries Minecraft's cloud layer, which leaves with the perspective view", t => {
+  const f = sceneFixture(t); f.ready(); f.frame(0);
+  const clouds = f.view.clouds;
+  assert(clouds, "overworld maps have clouds");
+  assert(f.rendered.at(-1).scene.children.includes(clouds.mesh));
+  assert.equal(clouds.mesh.visible, true);
+  assert(clouds.mesh.geometry.instanceCount > 1000, "the full 128-chunk cloud range is meshed");
+  assert(f.view.viewCamera.far >= 2048, "the far plane reaches the cloud fog end");
+  const uniforms = clouds.mesh.material.uniforms;
+  near(uniforms.uOffset.value.y, 192.33, "clouds sit at the overworld cloud height");
+  // Orbiting up into the layer fades it instead of veiling the map with cloud tops.
+  const position = f.view.viewCamera.position.clone();
+  clouds.update(new three.Vector3(position.x, 184.33, position.z), { x: 0, z: 0 }, 0, 1);
+  near(uniforms.uOpacity.value, 0.5);
+  clouds.update(new three.Vector3(position.x, 200, position.z), { x: 0, z: 0 }, 0, 1);
+  assert.equal(clouds.mesh.visible, false);
+  clouds.update(position, { x: 0, z: 0 }, 0, 1);
+  f.view.setProjection("orthographic");
+  for (let time = 16; time <= 2000; time += 100) f.frame(time);
+  assert.equal(f.view.isTransitioning, false);
+  assert.equal(clouds.mesh.visible, false, "the overhead map has no clouds over it");
+});
+
+for (const dimension of ["minecraft:the_nether", "minecraft:the_end"]) test(dimension + " has no cloud_color and therefore no clouds", t => {
+  const f = sceneFixture(t, false, false, false, 1, { dimension }); f.ready(); f.frame(0);
+  assert.equal(f.view.clouds, undefined);
+  assert(f.rendered.at(-1).scene.children.every(child => child.isGroup));
 });

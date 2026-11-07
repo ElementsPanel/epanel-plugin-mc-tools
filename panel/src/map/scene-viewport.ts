@@ -7,10 +7,13 @@ import { sceneMaterials } from "./scene-materials";
 import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjection } from "./perspective-transition";
 import { SceneKind } from "../../../shared/scene";
 import { sortTransparentFaces } from "./scene-transparency";
+import { CLOUD_RANGE, SceneClouds, TICKS_PER_SECOND } from "./scene-clouds";
 import { KeyboardNavigation } from "./navigation";
 import { normalizeBearing, rotatedSize, screenToWorld, tileInView } from "./bearing";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
+// Reach the far edge of the cloud layer; depth precision is set by the near plane.
+const VIEW_FAR = CLOUD_RANGE + 256;
 const tileKey = (x: number, z: number) => `surface:${x}:${z}`;
 const clamp = (value: number) => Math.max(-MAP_LIMIT, Math.min(MAP_LIMIT, value));
 interface SceneTile { x: number; z: number; key: string; position: string; group: Group; heights: Int16Array; count: number; warnings: number; limited: boolean; animated: boolean }
@@ -40,7 +43,7 @@ export function visibleTopDownTiles(camera: Camera, width: number, height: numbe
 export class SceneViewport implements MapRenderer {
   readonly camera: Camera = { x: 0, z: 0, zoom: 2 };
   private readonly scene = new Scene();
-  private readonly viewCamera = new PerspectiveCamera(MAP_FOV, 1, 0.1, 600);
+  private readonly viewCamera = new PerspectiveCamera(MAP_FOV, 1, 0.1, VIEW_FAR);
   private readonly topCamera = new OrthographicCamera(-1, 1, 1, -1, .1, MAP_MAX_Y - MAP_MIN_Y + 128);
   private topZoom = 2;
   private topBearing = 0;
@@ -73,6 +76,9 @@ export class SceneViewport implements MapRenderer {
   private orbit = { polar: Math.acos(1 / Math.sqrt(3)), azimuth: Math.PI / 4 };
   private transition?: { from: number; to: number; startedAt: number };
   private readonly sky: Color;
+  /** Only dimensions whose cloud_color is visible (the overworld) have a cloud layer. */
+  private readonly clouds?: SceneClouds;
+  private readonly cloudEpoch = Date.now();
   private playerProjection?: Matrix4;
   private readonly reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -103,6 +109,7 @@ export class SceneViewport implements MapRenderer {
     const sky = nether ? 0x482728 : end ? 0x242036 : 0xbad8f3;
     this.sky = new Color(sky);
     this.materials = sceneMaterials(sky, nether, () => { this.atlasReady = true; this.schedule(); }, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
+    if (world.dimension === "minecraft:overworld") { this.clouds = new SceneClouds(); this.scene.add(this.clouds.mesh); }
     this.origin = { x: Math.floor(world.spawn.x / SIZE) * SIZE, z: Math.floor(world.spawn.z / SIZE) * SIZE };
     const target = new Vector3(world.spawn.x - this.origin.x, 66, world.spawn.z - this.origin.z);
     this.viewCamera.position.copy(target).add(new Vector3(46, 46, 46).setLength(80));
@@ -261,6 +268,7 @@ export class SceneViewport implements MapRenderer {
     this.displayed.clear(); this.pending.clear(); this.failed.clear(); this.skipped.clear();
     this.materials[0].uniforms.uAtlas.value.dispose(); this.materials[0].uniforms.uAnimation.value.dispose();
     for (const material of this.materials) material.dispose();
+    this.clouds?.dispose();
     this.scene.clear();
     this.renderer.dispose(); this.renderer.forceContextLoss();
   }
@@ -385,6 +393,9 @@ export class SceneViewport implements MapRenderer {
       if (mesh.material === this.materials[SceneKind.Translucent]) sortTransparentFaces(mesh.geometry,
         transform.multiplyMatrices(activeCamera.matrixWorldInverse, mesh.matrixWorld));
     }
+    // Clouds belong to the sky: they fade out with the fog as the camera rises to the
+    // overhead view and are absent from it.
+    this.clouds?.update(this.viewCamera.position, this.origin, this.cloudTicks(), orthographic ? 0 : this.blend ** 8);
     this.renderer.render(this.scene, activeCamera);
     const needed = coverage.filter(tile => {
       const key = tileKey(tile.x, tile.z);
@@ -395,7 +406,8 @@ export class SceneViewport implements MapRenderer {
     this.changed({ x: Math.round(x), z: Math.round(z), zoom: this.camera.zoom, bearing: this.bearing, loading, warnings, limited, empty: !loading && !count && !this.error, error: this.error });
     for (const item of needed.slice(0, Math.max(0, 2 - this.pending.size))) void this.fetch(item);
     if (settling || transitioning || movement) this.schedule();
-    if (this.transition || animated && !this.reducedMotion) this.animationTimer = setTimeout(this.schedule, 50);
+    const drifting = !!this.clouds?.mesh.visible;
+    if (this.transition || (animated || drifting) && !this.reducedMotion) this.animationTimer = setTimeout(this.schedule, 50);
   }
 
   private advanceTransition() {
@@ -413,7 +425,7 @@ export class SceneViewport implements MapRenderer {
     this.viewCamera.lookAt(target);
     // Match both projections' scale at the target while the camera descends from above the world's height limit.
     this.viewCamera.fov = 2 * Math.atan(pose.halfHeight / pose.distance) * 180 / Math.PI;
-    this.viewCamera.far = Math.max(600, pose.distance + target.y - MAP_MIN_Y + 128);
+    this.viewCamera.far = Math.max(VIEW_FAR, pose.distance + target.y - MAP_MIN_Y + 128);
     this.viewCamera.updateProjectionMatrix();
     this.viewCamera.projectionMatrix.copy(transitionProjection(this.viewCamera.projectionMatrix, this.viewCamera.aspect, this.viewCamera.near, this.viewCamera.far, pose));
     this.viewCamera.projectionMatrixInverse.copy(this.viewCamera.projectionMatrix).invert();
@@ -421,12 +433,15 @@ export class SceneViewport implements MapRenderer {
       this.transition = undefined;
       this.controls.enabled = !this.topDown;
         if (!this.topDown) {
-        this.viewCamera.up.set(0, 1, 0); this.viewCamera.fov = MAP_FOV; this.viewCamera.far = 600; this.viewCamera.updateProjectionMatrix();
+        this.viewCamera.up.set(0, 1, 0); this.viewCamera.fov = MAP_FOV; this.viewCamera.far = VIEW_FAR; this.viewCamera.updateProjectionMatrix();
         this.controls.update();
       }
     }
     return progress < 1;
   }
+
+  /** Game ticks drive the cloud scroll; reduced motion keeps the layer still. */
+  private cloudTicks() { return (this.reducedMotion ? this.cloudEpoch : Date.now()) / 1000 * TICKS_PER_SECOND; }
 
   private distance(tile: { x: number; z: number }) { return Math.hypot((tile.x + 0.5) * SIZE - this.camera.x, (tile.z + 0.5) * SIZE - this.camera.z); }
 

@@ -11,5 +11,6 @@
   "supplementVersion": "26.3",
   "supplementJarSha256": "4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d",
   "supplementBlocks": 90,
-  "stateModels": 858
+  "stateModels": 858,
+  "cloudsVersion": "26.3"
 }
