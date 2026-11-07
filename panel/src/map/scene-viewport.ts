@@ -108,7 +108,7 @@ export class SceneViewport implements MapRenderer {
     const nether = world.dimension === "minecraft:the_nether", end = world.dimension === "minecraft:the_end";
     const sky = nether ? 0x482728 : end ? 0x242036 : 0xbad8f3;
     this.sky = new Color(sky);
-    this.materials = sceneMaterials(sky, nether, () => { this.atlasReady = true; this.schedule(); }, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
+    this.materials = sceneMaterials(nether, () => { this.atlasReady = true; this.schedule(); }, () => { if (!this.abort.signal.aborted) { this.error = new Error("MC_MAP_READ_FAILED"); this.schedule(); } });
     if (world.dimension === "minecraft:overworld") { this.clouds = new SceneClouds(); this.scene.add(this.clouds.mesh); }
     this.origin = { x: Math.floor(world.spawn.x / SIZE) * SIZE, z: Math.floor(world.spawn.z / SIZE) * SIZE };
     const target = new Vector3(world.spawn.x - this.origin.x, 66, world.spawn.z - this.origin.z);
@@ -374,9 +374,6 @@ export class SceneViewport implements MapRenderer {
     const transitioning = this.advanceTransition();
     const orthographic = this.topDown && !this.transition;
     this.scene.background = orthographic ? null : this.sky;
-    const fogScale = this.blend === 1 ? 1 : 1 / Math.max(.0001, this.blend ** 8);
-    this.materials[0].uniforms.uFogNear.value = 96 * fogScale;
-    this.materials[0].uniforms.uFogFar.value = 220 * fogScale;
     if (orthographic) {
       this.topCamera.left = -this.width / this.topZoom / 2; this.topCamera.right = -this.topCamera.left;
       this.topCamera.top = this.height / this.topZoom / 2; this.topCamera.bottom = -this.topCamera.top;
@@ -394,8 +391,8 @@ export class SceneViewport implements MapRenderer {
       if (mesh.material === this.materials[SceneKind.Translucent]) sortTransparentFaces(mesh.geometry,
         transform.multiplyMatrices(activeCamera.matrixWorldInverse, mesh.matrixWorld));
     }
-    // Clouds belong to the sky: they fade out with the fog as the camera rises to the
-    // overhead view and are absent from it.
+    // Clouds belong to the sky: they fade out as the camera rises to the overhead
+    // view and are absent from it.
     this.clouds?.update(this.viewCamera.position, this.origin, this.cloudTicks(), orthographic ? 0 : this.blend ** 8);
     this.renderer.render(this.scene, activeCamera);
     const needed = coverage.filter(tile => {

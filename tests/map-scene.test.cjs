@@ -462,3 +462,39 @@ test("compressed scene tiles inflate to the same geometry and reject damaged pay
   const gzip = require("node:zlib").gzipSync(Buffer.alloc(20));
   await assert.rejects(() => decodeSceneTile({ ...packed, payload: gzip.toString("base64") }), /MC_MAP_CORRUPT/);
 });
+
+test("lanterns, signs and enchanting tables expand from their vanilla elements instead of full cubes", async () => {
+  const { modelFaces, sceneModels } = load("panel/src/map/model-geometry.ts");
+  const blocks = ["oak_sign", "oak_wall_sign", "lantern", "enchanting_table", "oak_sign"];
+  const properties = [{ rotation: "3" }, { facing: "east" }, { hanging: "true" }, {}, { rotation: "8" }];
+  const placed = i => (i >> 8) === 0 && ((i >> 4) & 15) === 0 && (i & 15) < blocks.length;
+  const result = await tile([chunk([{ y: 0, block: i => placed(i) ? blocks[i & 15] : "air", properties: i => placed(i) ? properties[i & 15] : undefined }])]);
+  const carriers = quads(result).filter(q => q.flags & 32).sort((a, b) => a.x - b.x);
+  assert.equal(carriers.length, blocks.length);
+  const expand = carrier => modelFaces(carrier.texture, carrier.flags >> 6);
+  const maxY = faces => Math.max(...faces.map(face => {
+    const axis = face.face >> 1;
+    return face.maxY ?? (axis === 1 ? face.origin[1] : face.origin[1] + face.size[axis === 0 ? 0 : 1]);
+  }));
+  const sprite = name => minecraftAssets.textures.find(texture => texture[0] === "block/" + name)[1];
+  carriers.forEach((carrier, index) => {
+    assert.equal(carrier.x, index, blocks[index] + " is a model carrier");
+    assert(sceneModels.has(carrier.texture), blocks[index] + " has an expanded model");
+    assert(expand(carrier).length > 1, blocks[index] + " is not a plain cube");
+  });
+  const [diagonal, wall, lantern, table, turned] = carriers.map(expand);
+  assert.equal(diagonal.length, 11, "a standing sign is a post plus a board");
+  assert(Math.abs(maxY(diagonal) - 17.33333 / 16) < 1e-6, "the board rises above the block");
+  assert.equal(carriers[4].flags >> 6, 2, "rotation 8 yaws the sign by 180°");
+  assert(Math.abs(maxY(turned) - 17.33333 / 16) < 1e-6);
+  assert.equal(carriers[1].flags >> 6, 3, "facing east yaws the wall sign by 270°");
+  assert.equal(wall.length, 6); assert(Math.abs(maxY(wall) - 12.33333 / 16) < 1e-6);
+  assert(wall.every(face => face.texture === sprite("oak_sign")));
+  assert.equal(lantern.length, 16, "a hanging lantern adds its cap and crossed chains");
+  assert.equal(maxY(lantern), 1, "hanging chains reach the ceiling");
+  assert(lantern.every(face => face.texture === sprite("lantern")));
+  assert.equal(table.length, 6); assert.equal(maxY(table), 12 / 16);
+  assert(table.some(face => face.texture === sprite("enchanting_table_top")));
+  assert(table.some(face => face.texture === sprite("enchanting_table_bottom")));
+  assert(table.some(face => face.texture === sprite("enchanting_table_side")));
+});

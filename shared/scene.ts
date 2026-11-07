@@ -212,3 +212,87 @@ const snowModels = Array.from({ length: 8 }, (_, index) => snowLayerModel(index 
 Object.assign(minecraftAssets.blocks, { snow: snowModels[0] });
 minecraftAssets.states.snow = { properties: ["layers"], defaults: ["1"],
   variants: Object.fromEntries(snowModels.map((_, index) => [String(index + 1), index])), models: snowModels };
+
+/** Vanilla lantern: a 6×6 body under a smaller cap, plus crossed chain planes. */
+function lanternModel(texture: number, hanging: boolean, key: number): MinecraftBlock {
+  const face = (uv: number[]) => modelFace(texture, uv);
+  const body = face([0, 2, 6, 9]), cap = face([1, 0, 5, 2]), tilt = { origin: [8, 8, 8], axis: "y" as const, angle: 45 };
+  const elements: ModelElement[] = [
+    { from: hanging ? [5, 1, 5] : [5, 0, 5], to: hanging ? [11, 8, 11] : [11, 7, 11],
+      faces: { north: body, south: body, west: body, east: body, up: face([0, 9, 6, 15]), down: face([0, 9, 6, 15]) } },
+    { from: hanging ? [6, 8, 6] : [6, 7, 6], to: hanging ? [10, 10, 10] : [10, 9, 10],
+      faces: hanging ? { north: cap, south: cap, west: cap, east: cap, up: face([1, 10, 5, 14]), down: face([1, 10, 5, 14]) }
+        : { north: cap, south: cap, west: cap, east: cap, up: face([1, 10, 5, 14]) } },
+    { from: hanging ? [6.5, 11, 8] : [6.5, 9, 8], to: hanging ? [9.5, 15, 8] : [9.5, 11, 8], rotation: tilt,
+      faces: { north: face(hanging ? [14, 1, 11, 5] : [14, 1, 11, 3]), south: face(hanging ? [11, 1, 14, 5] : [11, 1, 14, 3]) } },
+    { from: hanging ? [8, 10, 6.5] : [8, 9, 6.5], to: hanging ? [8, 16, 9.5] : [8, 11, 9.5], rotation: tilt,
+      faces: { west: face(hanging ? [14, 6, 11, 12] : [14, 10, 11, 12]), east: face(hanging ? [11, 6, 14, 12] : [11, 10, 14, 12]) } }
+  ];
+  return { faces: [texture, texture, texture, texture, texture, texture], tint: 0, overlay: 0, kind: SceneKind.Cutout, shape: "model", key, solid: false, elements };
+}
+
+/** Vanilla standing sign: a 4-pixel post under a board. The board and post tilt by
+ *  ±22.5° for the diagonal rotations, so the tilt is baked into the elements. */
+function standingSignModel(texture: number, key: number, tilt: number, yaw: number): MinecraftBlock {
+  const face = (uv: number[]) => modelFace(texture, uv);
+  const rotation = tilt ? { origin: [8, 0, 8], axis: "y" as const, angle: tilt } : undefined;
+  const post: ModelElement = { from: [7.33333, 0, 7.33333], to: [8.66667, 9.33333, 8.66667], ...(rotation ? { rotation } : {}),
+    faces: { north: face([14, 8, 15, 15]), east: face([15, 0, 16, 7]), south: face([14, 0, 15, 7]), west: face([15, 8, 16, 15]), down: face([14, 15, 15, 16]) } };
+  const board: ModelElement = { from: [0, 9.33333, 7.33333], to: [16, 17.33333, 8.66667], ...(rotation ? { rotation } : {}),
+    faces: { north: face([0, 8, 12, 14]), east: face([12, 1, 13, 7]), south: face([0, 1, 12, 7]), west: face([12, 8, 13, 14]), up: face([0, 0, 12, 1]), down: face([0, 14, 12, 15]) } };
+  return { faces: [texture, texture, texture, texture, texture, texture], tint: 0, overlay: 0, kind: SceneKind.Cutout,
+    shape: "model", key, solid: false, rotation: yaw, elements: [post, board] };
+}
+
+/** Vanilla wall sign geometry points south; the blockstate yaw orients the others. */
+function wallSignModel(texture: number, key: number, yaw: number): MinecraftBlock {
+  const face = (uv: number[]) => modelFace(texture, uv);
+  return { faces: [texture, texture, texture, texture, texture, texture], tint: 0, overlay: 0, kind: SceneKind.Cutout,
+    shape: "model", key, solid: false, rotation: yaw,
+    elements: [{ from: [0, 4.33333, 0.33333], to: [16, 12.33333, 1.66667],
+      faces: { north: face([0, 8, 12, 14]), east: face([12, 1, 13, 7]), south: face([0, 1, 12, 7]), west: face([12, 8, 13, 14]),
+        up: face([0, 0, 12, 1]), down: face([0, 14, 12, 15]) } }] };
+}
+
+// Synthetic model keys stay above the atlas sprite indices and clear of the other patches.
+let customModelKey = 0xE000;
+const lanternNames = ["lantern", "soul_lantern", "copper_lantern", "exposed_copper_lantern", "weathered_copper_lantern", "oxidized_copper_lantern"];
+for (const name of lanternNames) {
+  const block = minecraftAssets.blocks[name];
+  if (!block) continue;
+  const texture = spriteFrame(name), standing = lanternModel(texture, false, customModelKey++), hanging = lanternModel(texture, true, customModelKey++);
+  Object.assign(block, { faces: [texture, texture, texture, texture, texture, texture], shape: "model", solid: false, key: standing.key, elements: standing.elements });
+  minecraftAssets.states[name] = { properties: ["hanging"], defaults: ["false"],
+    variants: { false: 0, true: 1 }, models: [standing, hanging] };
+}
+
+const signTilts = [0, -22.5, -45, -67.5], wallSignYaw: Record<string, number> = { south: 0, west: 90, north: 180, east: 270 };
+const signWoods = new Set<string>();
+for (const name of Object.keys(minecraftAssets.blocks)) {
+  if (name.endsWith("_wall_sign")) signWoods.add(name.slice(0, -10));
+  else if (name.endsWith("_sign") && !name.includes("hanging")) signWoods.add(name.slice(0, -5));
+}
+for (const wood of signWoods) {
+  if (!minecraftAssets.blocks[wood + "_sign"] || !minecraftAssets.blocks[wood + "_wall_sign"]) continue;
+  const texture = spriteFrame(wood + "_sign");
+  const standing = Array.from({ length: 16 }, (_, rotation) =>
+    standingSignModel(texture, customModelKey++, signTilts[rotation % 4], Math.floor(rotation / 4) * 90));
+  const wall = Object.entries(wallSignYaw).map(([, yaw]) => wallSignModel(texture, customModelKey++, yaw));
+  Object.assign(minecraftAssets.blocks[wood + "_sign"],
+    { faces: [texture, texture, texture, texture, texture, texture], shape: "model", solid: false, rotation: 0, key: standing[0].key, elements: standing[0].elements });
+  Object.assign(minecraftAssets.blocks[wood + "_wall_sign"],
+    { faces: [texture, texture, texture, texture, texture, texture], shape: "model", solid: false, rotation: 0, key: wall[0].key, elements: wall[0].elements });
+  minecraftAssets.states[wood + "_sign"] = { properties: ["rotation"], defaults: ["0"],
+    variants: Object.fromEntries(standing.map((_, index) => [String(index), index])), models: standing };
+  minecraftAssets.states[wood + "_wall_sign"] = { properties: ["facing"], defaults: ["south"],
+    variants: Object.fromEntries(Object.keys(wallSignYaw).map((facing, index) => [facing, index])), models: wall };
+}
+
+// The enchanting table is a 12-pixel cube with distinct top, side and bottom sprites.
+const tableSide = spriteFrame("enchanting_table_side"), tableTop = spriteFrame("enchanting_table_top"), tableBottom = spriteFrame("enchanting_table_bottom");
+Object.assign(minecraftAssets.blocks.enchanting_table, { faces: [tableSide, tableSide, tableTop, tableBottom, tableSide, tableSide],
+  shape: "model", solid: false, key: customModelKey++,
+  elements: [{ from: [0, 0, 0], to: [16, 12, 16], faces: {
+    down: modelFace(tableBottom, [0, 0, 16, 16]), up: modelFace(tableTop, [0, 0, 16, 16]),
+    north: modelFace(tableSide, [0, 4, 16, 16]), south: modelFace(tableSide, [0, 4, 16, 16]),
+    west: modelFace(tableSide, [0, 4, 16, 16]), east: modelFace(tableSide, [0, 4, 16, 16]) } }] });

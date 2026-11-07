@@ -1,9 +1,9 @@
-import { Color, DataTexture, DoubleSide, FloatType, FrontSide, NearestFilter, NearestMipmapLinearFilter, NoColorSpace, RGBAFormat, ShaderMaterial, TextureLoader, Vector2 } from "three";
+import { DataTexture, DoubleSide, FloatType, FrontSide, NearestFilter, NearestMipmapLinearFilter, NoColorSpace, RGBAFormat, ShaderMaterial, TextureLoader, Vector2 } from "three";
 import { minecraftAssets, SCENE_KIND_COUNT, SceneKind } from "../../../shared/scene";
 import { minecraftAtlasUrl, strawBedUrl } from "./minecraft-atlas";
 
 /** Java-style terrain shading: atlas pixels × biome tint × face/vertex lighting. */
-export function sceneMaterials(sky: number, nether: boolean, ready: () => void, failed: () => void) {
+export function sceneMaterials(nether: boolean, ready: () => void, failed: () => void) {
   let loading = 2;
   const loaded = () => { if (--loading === 0) ready(); };
   const atlas = new TextureLoader().load(minecraftAtlasUrl(), loaded, undefined, failed);
@@ -31,8 +31,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
     uAtlasSize: { value: new Vector2(layout.width, layout.height) }, uColumns: { value: layout.columns },
     uCell: { value: layout.cell }, uInner: { value: layout.inner }, uPadding: { value: layout.padding },
     uOverlay: { value: overlay }, uTime: { value: 0 },
-    uVerticalShade: { value: new Vector2(nether ? 0.9 : 1, nether ? 0.9 : 0.5) },
-    uFogColor: { value: new Color(sky).convertLinearToSRGB() }, uFogNear: { value: 96 }, uFogFar: { value: 220 }
+    uVerticalShade: { value: new Vector2(nether ? 0.9 : 1, nether ? 0.9 : 0.5) }
   };
   const materials = Array.from({ length: SCENE_KIND_COUNT }, (_, kind) => new ShaderMaterial({
     uniforms,
@@ -57,7 +56,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       varying float vTexture;
       varying float vFlags;
       varying float vShade;
-      varying float vFogDistance;
       void main() {
         vec2 corner = position.xy;
         vec4 ao = mod(floor(vec4(aMaterial.z) / vec4(1.0, 4.0, 16.0, 64.0)), 4.0);
@@ -71,8 +69,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         else if (aFace < 6.0) vertex += vec3(corner.x * aSize.x, corner.y * aSize.y, 0.0);
         else vertex += vec3(aFace > 6.5 ? 1.0 - corner.x : corner.x, corner.y, corner.x);
         if (mod(floor(aMaterial.y / 16.0), 2.0) > 0.5) vertex.y += 0.015625;
-        vec4 world = modelMatrix * vec4(vertex, 1.0);
-        vec3 relative = world.xyz - cameraPosition;
         vUv = aFace < 2.0 ? corner.yx * aSize.yx : corner * aSize;
         vTint0 = color; vTint1 = aTint1; vTint2 = aTint2; vTint3 = aTint3;
         vCorner = corner;
@@ -81,7 +77,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         float shade = aFace < 2.0 ? 0.6 : aFace < 2.5 ? uVerticalShade.x : aFace < 3.5 ? uVerticalShade.y : aFace < 6.0 ? 0.8 : 1.0;
         float occlusion = corner.y > 0.5 ? (corner.x > 0.5 ? ao.z : ao.w) : (corner.x > 0.5 ? ao.y : ao.x);
         vShade = mod(floor(aMaterial.y / 8.0), 2.0) > 0.5 ? 1.0 : shade * (1.0 - occlusion * 0.2);
-        vFogDistance = max(length(relative.xz), abs(relative.y));
         gl_Position = projectionMatrix * modelViewMatrix * vec4(vertex, 1.0);
       }
     `,
@@ -98,9 +93,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       uniform float uPadding;
       uniform float uOverlay;
       uniform float uTime;
-      uniform vec3 uFogColor;
-      uniform float uFogNear;
-      uniform float uFogFar;
       varying vec2 vUv;
       varying vec3 vTint0, vTint1, vTint2, vTint3;
       varying vec2 vCorner;
@@ -108,7 +100,6 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
       varying float vTexture;
       varying float vFlags;
       varying float vShade;
-      varying float vFogDistance;
       vec2 mappedUv() {
         vec2 local = mod(floor(vFlags / 32.0), 2.0) > 0.5 ? vCorner : fract(vUv);
         return vec2(dot(vUvU, vec3(1.0, local)), dot(vUvV, vec3(1.0, local)));
@@ -153,8 +144,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         } else texel.rgb *= tint;
         if (texel.a < 0.1) discard;
         vec3 color = texel.rgb * vShade;
-        float fog = clamp((vFogDistance - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
-        gl_FragColor = vec4(mix(color, uFogColor, fog), ${kind === SceneKind.Translucent ? "texel.a" : "1.0"});
+        gl_FragColor = vec4(color, ${kind === SceneKind.Translucent ? "texel.a" : "1.0"});
       }
     `,
     transparent: kind === SceneKind.Translucent,

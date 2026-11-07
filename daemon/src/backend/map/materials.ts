@@ -61,6 +61,6 @@ export function blockMaterial(block: string, biome = "minecraft:plains", propert
   const kind = model.fire || plants.test(name) || model.shape === "ground" || model.shape === "cross" ? SceneKind.Plant : model.kind;
   return { name, color, model, biomeTint, kind,
     ...(model.fire ? { fire: fireConnections(properties) } : {}),
-    emissive: /^(?:fire|soul_fire|lava|glowstone|sea_lantern|shroomlight|jack_o_lantern|torch|soul_torch|lantern|soul_lantern|end_rod|ochre_froglight|verdant_froglight|pearlescent_froglight)$/.test(name) };
+    emissive: /^(?:fire|soul_fire|lava|glowstone|sea_lantern|shroomlight|jack_o_lantern|torch|soul_torch|lantern|soul_lantern|(?:exposed_|weathered_|oxidized_)?copper_lantern|end_rod|ochre_froglight|verdant_froglight|pearlescent_froglight)$/.test(name) };
 }
 

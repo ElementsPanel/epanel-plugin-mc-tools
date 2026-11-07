@@ -56,7 +56,7 @@ test("terrain textures premultiply before mip filtering and water remains visibl
     three: { ...three, TextureLoader: class { load() { return texture; } } },
     "./minecraft-atlas": { minecraftAtlasUrl: () => "atlas.png", strawBedUrl: () => "straw_bed.png" }
   })("panel/src/map/scene-materials.ts");
-  const materials = sceneMaterials(0xbad8f3, false, () => {}, () => {});
+  const materials = sceneMaterials(false, () => {}, () => {});
   assert.equal(texture.premultiplyAlpha, true);
   assert.equal(materials[2].side, three.DoubleSide);
   assert.equal(materials[2].depthWrite, false);
@@ -90,11 +90,10 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
     render(scene, camera) { rendered.push({ scene, camera: camera.clone(), matrix: camera.projectionMatrix.clone(), position: camera.position.clone() }); }
   };
   const uniforms = { uAtlas: { value: { dispose() {} } }, uAnimation: { value: { dispose() {} } },
-    uFogColor: { value: new three.Color() },
-    uTime: { value: 0 }, uFogNear: { value: 96 }, uFogFar: { value: 220 } };
+    uTime: { value: 0 } };
   const { SceneViewport, visibleTopDownTiles } = loader({ three: { ...three, WebGLRenderer: renderer },
     "three/addons/controls/OrbitControls.js": { OrbitControls: actualControls ? require("three/addons/controls/OrbitControls.js").OrbitControls : controls },
-    "./scene-materials": { sceneMaterials(_sky, _nether, callback) { ready = callback; return Array.from({ length: 4 }, () => ({ uniforms, dispose() {} })); } }
+    "./scene-materials": { sceneMaterials(_nether, callback) { ready = callback; return Array.from({ length: 4 }, () => ({ uniforms, dispose() {} })); } }
   })("panel/src/map/scene-viewport.ts");
   const canvas = { style: {}, clientWidth: 1100, clientHeight: 700, ownerDocument: { addEventListener() {}, removeEventListener() {} },
     getBoundingClientRect: () => ({ width: 1100 * scale, height: 700 * scale }), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name), focus() {} };
@@ -404,7 +403,6 @@ test("the orthographic scene has exact 2D scale at every elevation and remains a
     assert.equal(camera.isOrthographicCamera, true);
     assert.equal(render.scene.fog, null); assert.equal(render.scene.background, null);
     assert.equal(f.view.controls.enabled, false);
-    assert(f.uniforms.uFogNear.value > camera.far, "overhead camera must not fog out terrain");
     for (const y of [MAP_MIN_Y, -64, 64, MAP_MAX_Y + 1]) {
       const projected = new three.Vector3(camera.position.x + 17, y, camera.position.z + 23).project(camera);
       near(projected.x, 17 * zoom * 2 / width); near(projected.y, -23 * zoom * 2 / height);

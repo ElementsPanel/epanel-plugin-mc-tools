@@ -98,7 +98,7 @@ for source in json.load(sys.stdin):
         "modelViewMatrix": [1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1],
         "cameraPosition": [0, 2, 0], "uAtlasSize": [1, 1], "uColumns": [1], "uCell": [1],
         "uInner": [1], "uPadding": [0], "uAnimationWidth": [1],
-        "uVerticalShade": [1, .5], "uFogNear": [96], "uFogFar": [220]
+        "uVerticalShade": [1, .5]
     }.items():
         uniform(name, values)
     uniform("uAtlas", [0], True)
