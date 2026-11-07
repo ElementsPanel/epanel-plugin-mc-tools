@@ -119,7 +119,7 @@ export class WorldMapService {
         this.sceneBytes -= this.sceneCache.get(key)?.bytes || 0;
         const bytes = tile.quads.length + tile.heights.length + (tile.tints?.length ?? 0);
         this.sceneCache.set(key, { stamp, tile, bytes }); this.sceneBytes += bytes;
-        while (this.sceneBytes > 32 * 1024 * 1024 || this.sceneCache.size > 128) {
+        while (this.sceneBytes > 48 * 1024 * 1024 || this.sceneCache.size > 256) {
           const oldest = this.sceneCache.keys().next().value!;
           this.sceneBytes -= this.sceneCache.get(oldest)!.bytes;
           this.sceneCache.delete(oldest);

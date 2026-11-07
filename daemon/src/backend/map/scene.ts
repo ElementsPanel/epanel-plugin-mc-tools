@@ -7,6 +7,9 @@ import { biomeBlend } from "./biome-blend";
 import { fireElements } from "../../../../shared/fire";
 
 export interface SceneChunk { x: number; z: number; layers: BlockLayer[] }
+const CORNERS: readonly (readonly [number, number])[] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+/** Blocks the fluid pass owns; a regex per voxel was measurable on its own. */
+const waterBody = new Set(["minecraft:water", "water", "minecraft:flowing_water", "flowing_water", "minecraft:bubble_column", "bubble_column"]);
 const SIZE = MAP_SCENE_SIZE, AREA = SIZE * SIZE;
 const STRIDE = SIZE + 2, PADDED_AREA = STRIDE * STRIDE;
 /** Cull hidden voxel faces, then merge coplanar faces of the same block material. */
@@ -22,12 +25,19 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
   const indexOf = (x: number, y: number, z: number) => (y + 1) * PADDED_AREA + (z + 1) * STRIDE + x + 1;
   const materials: Material[] = [{ name: "air", color: 0xffffff, model: blockMaterial("air").model, kind: SceneKind.Opaque, emissive: false }];
   const names = new Map<string, number>();
-  const base = new Map<string, Material>();
+  // Resolving a block state costs a few lookups and string operations; doing it per
+  // voxel dominated the mesh. Properties objects come straight from the palette, so
+  // their identity is a safe cache key.
+  const plainStates = new Map<string, { source: Material; state: string; tinted: boolean }>();
+  const propertyStates = new WeakMap<object, Map<string, { source: Material; state: string; tinted: boolean }>>();
   const blend = biomeBlend([...chunks, ...neighbors]);
-  const cornerTints = new Map<string, number[]>();
+  const cornerTints = new Map<number, number[]>();
+  // Vertex tint is memoised per padded position and biome slot; the numeric key keeps
+  // the lookup allocation-free on the hottest path of the mesh.
+  const cornerKey = (x: number, y: number, z: number, tint: number) => (((y + 1) * STRIDE + (z + 1)) * STRIDE + (x + 1)) * 4 + tint;
   const cornerTint = (x: number, y: number, z: number, source: Material) => {
     if (source.biomeTint === undefined) return [source.color >> 16, (source.color >> 8) & 255, source.color & 255];
-    const key = [x, y, z, source.biomeTint].join(":");
+    const key = cornerKey(x, y, z, source.biomeTint);
     let rgb = cornerTints.get(key);
     if (!rgb) {
       rgb = [0, 0, 0];
@@ -41,21 +51,43 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
     }
     return rgb;
   };
+  const tintScratch = new Uint8Array(12);
   const tintFace = (x: number, y: number, z: number, w: number, h: number, face: number, source: Material) => {
-    const output: number[] = [], side = face < 6 ? face : 4;
+    const side = face < 6 ? face : 4;
     const tinted = (source.model.tint | source.model.overlay) & (1 << side);
-    for (const [u, v] of [[0, 0], [1, 0], [1, 1], [0, 1]]) {
-      const point = face < 2 ? [x, y + u * w, z + v * h] : face < 4 ? [x + v * h, y, z + u * w]
-        : face < 6 ? [x + u * w, y + v * h, z] : [x + (face === 7 ? 1 - u : u), y + v, z + u];
-      output.push(...(tinted ? cornerTint(point[0], point[1], point[2], source) : [255, 255, 255]));
+    for (let corner = 0; corner < 4; corner++) {
+      const u = CORNERS[corner][0], v = CORNERS[corner][1];
+      let px: number, py: number, pz: number;
+      if (face < 2) { px = x; py = y + u * w; pz = z + v * h; }
+      else if (face < 4) { px = x + v * h; py = y; pz = z + u * w; }
+      else if (face < 6) { px = x + u * w; py = y + v * h; pz = z; }
+      else { px = x + (face === 7 ? 1 - u : u); py = y + v; pz = z + u; }
+      if (tinted) {
+        const rgb = cornerTint(px, py, pz, source);
+        tintScratch[corner * 3] = rgb[0]; tintScratch[corner * 3 + 1] = rgb[1]; tintScratch[corner * 3 + 2] = rgb[2];
+      } else tintScratch[corner * 3] = tintScratch[corner * 3 + 1] = tintScratch[corner * 3 + 2] = 255;
     }
-    return output;
+    return tintScratch;
+  };
+  const stateOf = (name: string, properties?: Readonly<Record<string, string>>) => {
+    let table = plainStates;
+    if (properties) {
+      table = propertyStates.get(properties)!;
+      if (!table) { table = new Map(); propertyStates.set(properties, table); }
+    }
+    let cached = table.get(name);
+    if (!cached) {
+      const source = blockMaterial(name, undefined, properties);
+      cached = {
+        source, state: blockStateKey(name, properties),
+        tinted: source.color !== 0xffffff && !!(source.model.tint || source.model.overlay)
+      };
+      table.set(name, cached);
+    }
+    return cached;
   };
   const palette = (name: string, x: number, y: number, z: number, biome?: string, properties?: Readonly<Record<string, string>>) => {
-    const state = blockStateKey(name, properties);
-    let source = base.get(state);
-    if (!source) { source = blockMaterial(name, undefined, properties); base.set(state, source); }
-    const tinted = source.color !== 0xffffff && !!(source.model.tint || source.model.overlay);
+    const { source, state, tinted } = stateOf(name, properties);
     const color = tinted && source.biomeTint !== undefined ? blend(x, y, z, source.biomeTint, biome) : undefined;
     const key = tinted ? state + "@" + (color ?? biome ?? "minecraft:plains") : state;
     let id = names.get(key);
@@ -88,11 +120,33 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
             fluids ??= new Uint16Array(voxels.length);
             fluids[position] = palette(fluid, chunk.x * 16 + x, worldY, chunk.z * 16 + z, biome);
           }
-          if (!/^(?:minecraft:)?(?:flowing_water|water|bubble_column)$/.test(name)) voxels[position] = palette(name, chunk.x * 16 + x, worldY, chunk.z * 16 + z, biome, properties);
+          if (!waterBody.has(name)) voxels[position] = palette(name, chunk.x * 16 + x, worldY, chunk.z * 16 + z, biome, properties);
         }
       }
       await new Promise<void>(resolve => setImmediate(resolve));
     }
+  }
+
+  // Materials are final here; the scan below runs hundreds of thousands of times, so
+  // kind checks and model costs move into flat arrays.
+  const OPAQUE = SceneKind.Opaque, PLANT = SceneKind.Plant, CUTOUT = SceneKind.Cutout, TRANSLUCENT = SceneKind.Translucent;
+  const total = materials.length;
+  const solidOf = new Uint16Array(total), opaqueOf = new Uint8Array(total), occludesAoOf = new Uint8Array(total);
+  const translucentOf = new Uint8Array(total), emissiveOf = new Uint8Array(total), nameOf = new Uint16Array(total);
+  const costOf = new Uint32Array(total);
+  const nameSlots = new Map<string, number>();
+  for (let id = 1; id < total; id++) {
+    const material = materials[id];
+    solidOf[id] = material.kind === PLANT ? 0 : id;
+    opaqueOf[id] = material.kind === OPAQUE ? 1 : 0;
+    occludesAoOf[id] = material.kind === OPAQUE || material.kind === CUTOUT ? 1 : 0;
+    translucentOf[id] = material.kind === TRANSLUCENT ? 1 : 0;
+    emissiveOf[id] = material.emissive ? 1 : 0;
+    let slot = nameSlots.get(material.name);
+    if (slot === undefined) { slot = nameSlots.size; nameSlots.set(material.name, slot); }
+    nameOf[id] = slot;
+    const elements = material.fire === undefined ? material.model.elements : fireElements(material.model, material.fire);
+    costOf[id] = elements?.reduce((sum, element) => sum + Object.keys(element.faces).length, 0) ?? 1;
   }
 
   const heights = Buffer.alloc(AREA * 2);
@@ -113,8 +167,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
   let count = 0, renderedCount = 0, limited = false;
   const quad = (x: number, y: number, z: number, width: number, tall: number, face: number, id: number, ao = 0) => {
     const source = materials[id];
-    const elements = source.fire === undefined ? source.model.elements : fireElements(source.model, source.fire);
-    const cost = elements?.reduce((sum, element) => sum + Object.keys(element.faces).length, 0) ?? 1;
+    const cost = costOf[id];
     if (renderedCount + cost > MAP_SCENE_MAX_QUADS) { limited = true; return; }
     renderedCount += cost;
     const side = face < 6 ? face : 4, overlay = !!(source.model.overlay & (1 << side));
@@ -131,12 +184,8 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
   };
   const cell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : voxels[indexOf(x, y, z)];
   const fluidCell = (x: number, y: number, z: number) => x < -1 || x > SIZE || z < -1 || z > SIZE || y < -1 || y > height ? 0 : fluids?.[indexOf(x, y, z)] || 0;
-  const cube = (id: number) => id && materials[id].kind !== SceneKind.Plant ? id : 0;
-  const occludes = (neighbor: number, current: number) => {
-    if (!neighbor) return false;
-    if (neighbor === current || materials[neighbor].name === materials[current].name) return true;
-    return materials[neighbor].kind === SceneKind.Opaque;
-  };
+  const occludes = (neighbor: number, current: number) =>
+    neighbor !== 0 && (neighbor === current || nameOf[neighbor] === nameOf[current] || opaqueOf[neighbor] === 1);
   const dimensions = [SIZE, height, SIZE];
   // The cyclic U/V axes give positive-facing winding; negative faces reverse it in the viewer.
   for (const fluidPass of fluids ? [false, true] : [false]) for (let axis = 0; axis < 3 && !limited; axis++) {
@@ -148,22 +197,21 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
       for (let sign = 0; sign < 2 && !limited; sign++) {
         for (let j = 0; j < tall; j++) for (let i = 0; i < width; i++) {
           position[u] = i; position[v] = j; position[axis] = plane - 1;
-          const solidA = cube(cell(position[0], position[1], position[2]));
+          const solidA = solidOf[cell(position[0], position[1], position[2])];
           const a = fluidPass ? fluidCell(position[0], position[1], position[2]) : solidA;
           position[axis] = plane;
-          const solidB = cube(cell(position[0], position[1], position[2]));
+          const solidB = solidOf[cell(position[0], position[1], position[2])];
           const b = fluidPass ? fluidCell(position[0], position[1], position[2]) : solidB;
           const owned = sign ? plane < dimensions[axis] : plane > 0;
           const solidCurrent = sign ? solidB : solidA;
-          const current = owned && !(fluidPass && solidCurrent && materials[solidCurrent].kind === SceneKind.Opaque) ? sign ? b : a : 0;
+          const current = owned && !(fluidPass && solidCurrent && opaqueOf[solidCurrent] === 1) ? sign ? b : a : 0;
           const neighbor = (sign ? a : b) || (fluidPass ? sign ? solidA : solidB : 0);
           let ao = 0;
-          if (current && !occludes(neighbor, current) && materials[current].kind !== SceneKind.Translucent && !materials[current].emissive) {
+          if (current && !occludes(neighbor, current) && !translucentOf[current] && !emissiveOf[current]) {
             const point = [...position]; point[axis] = sign ? plane - 1 : plane;
             const solid = (a: number, b: number) => {
               point[u] = i + a; point[v] = j + b;
-              const id = cell(point[0], point[1], point[2]);
-              return id && (materials[id].kind === SceneKind.Opaque || materials[id].kind === SceneKind.Cutout) ? 1 : 0;
+              return occludesAoOf[cell(point[0], point[1], point[2])];
             };
             for (let corner = 0; corner < 4; corner++) {
               const a = corner === 1 || corner === 2 ? 1 : -1, b = corner >= 2 ? 1 : -1;
@@ -175,7 +223,10 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
           if (current && !occludes(neighbor, current)) {
             position[axis] = plane;
             const colors = tintFace(position[0], position[1] + minY, position[2], 1, 1, axis * 2 + sign, materials[current]);
-            if (colors.some((value, i) => value !== colors[i % 3])) gradient = 1 << 24;
+            // Any corner colour deviating from the first one forces a per-corner quad.
+            for (let corner = 1; corner < 4 && !gradient; corner++) {
+              if (colors[corner * 3] !== colors[0] || colors[corner * 3 + 1] !== colors[1] || colors[corner * 3 + 2] !== colors[2]) gradient = 1 << 24;
+            }
           }
           mask[j * width + i] = current && !occludes(neighbor, current) ? current | (ao << 16) | gradient : 0;
         }
@@ -201,7 +252,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
   for (let y = 0; y < height && !limited; y++) {
     for (let z = 0; z < SIZE && !limited; z++) for (let x = 0; x < SIZE && !limited; x++) {
       const id = cell(x, y, z);
-      if (!id || materials[id].kind !== SceneKind.Plant) continue;
+      if (!id || materials[id].kind !== PLANT) continue;
       if (materials[id].model.shape === "ground" || materials[id].model.shape === "model") quad(x, y, z, 1, 1, 2, id);
       else { quad(x, y, z, 1, 1, 6, id); quad(x, y, z, 1, 1, 7, id); }
     }
