@@ -1,14 +1,23 @@
 import { Color, DataTexture, DoubleSide, FloatType, FrontSide, NearestFilter, NearestMipmapLinearFilter, NoColorSpace, RGBAFormat, ShaderMaterial, TextureLoader, Vector2 } from "three";
 import { minecraftAssets, SCENE_KIND_COUNT, SceneKind } from "../../../shared/scene";
-import { minecraftAtlasUrl } from "./minecraft-atlas";
+import { minecraftAtlasUrl, strawBedUrl } from "./minecraft-atlas";
 
 /** Java-style terrain shading: atlas pixels × biome tint × face/vertex lighting. */
 export function sceneMaterials(sky: number, nether: boolean, ready: () => void, failed: () => void) {
-  const atlas = new TextureLoader().load(minecraftAtlasUrl(), ready, undefined, failed);
+  let loading = 2;
+  const loaded = () => { if (--loading === 0) ready(); };
+  const atlas = new TextureLoader().load(minecraftAtlasUrl(), loaded, undefined, failed);
   atlas.colorSpace = NoColorSpace;
   // Filter/mipmap premultiplied texels so transparent black RGB cannot darken foliage edges.
   atlas.premultiplyAlpha = true;
   atlas.magFilter = NearestFilter; atlas.minFilter = NearestMipmapLinearFilter;
+  // The straw bed is a 64×64 sprite; sampling it directly keeps the straw detail
+  // that a 16×16 atlas cell would destroy.
+  const strawBed = new TextureLoader().load(strawBedUrl(), loaded, undefined, failed);
+  strawBed.colorSpace = NoColorSpace;
+  strawBed.premultiplyAlpha = true;
+  strawBed.magFilter = NearestFilter; strawBed.minFilter = NearestMipmapLinearFilter;
+  const strawBedSprite = minecraftAssets.textures.find(texture => texture[0] === "block/straw_bed")![1];
   const layout = minecraftAssets.atlas;
   const slots = layout.columns * layout.height / layout.cell;
   const width = 2 ** Math.ceil(Math.log2(slots));
@@ -17,7 +26,8 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
   const animation = new DataTexture(data, width, 1, RGBAFormat, FloatType); animation.needsUpdate = true;
   const overlay = minecraftAssets.textures.find(texture => texture[0] === "block/grass_block_side_overlay")![1];
   const uniforms = {
-    uAtlas: { value: atlas }, uAnimation: { value: animation }, uAnimationWidth: { value: width },
+    uAtlas: { value: atlas }, uStrawBed: { value: strawBed }, uStrawBedSprite: { value: strawBedSprite },
+    uAnimation: { value: animation }, uAnimationWidth: { value: width },
     uAtlasSize: { value: new Vector2(layout.width, layout.height) }, uColumns: { value: layout.columns },
     uCell: { value: layout.cell }, uInner: { value: layout.inner }, uPadding: { value: layout.padding },
     uOverlay: { value: overlay }, uTime: { value: 0 },
@@ -77,7 +87,9 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
     `,
     fragmentShader: `
       uniform sampler2D uAtlas;
+      uniform sampler2D uStrawBed;
       uniform sampler2D uAnimation;
+      uniform float uStrawBedSprite;
       uniform float uAnimationWidth;
       uniform vec2 uAtlasSize;
       uniform float uColumns;
@@ -108,6 +120,10 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         vec2 uv = vec2(pixel.x / uAtlasSize.x, 1.0 - pixel.y / uAtlasSize.y);
         return textureGrad(uAtlas, uv, du, dv);
       }
+      vec4 directSprite(vec2 du, vec2 dv) {
+        vec2 local = mappedUv();
+        return textureGrad(uStrawBed, local, du, dv);
+      }
       vec4 animatedSprite(float index, vec2 du, vec2 dv) {
         vec4 frames = texture2D(uAnimation, vec2((index + 0.5) / uAnimationWidth, 0.5));
         float clock = uTime / max(frames.z, 0.05);
@@ -127,7 +143,7 @@ export function sceneMaterials(sky: number, nether: boolean, ready: () => void, 
         float footprint = max(length(du * uAtlasSize), length(dv * uAtlasSize));
         float mipLimit = min(1.0, 8.0 / max(footprint, 0.001));
         du *= mipLimit; dv *= mipLimit;
-        vec4 texel = animatedSprite(vTexture, du, dv);
+        vec4 texel = vTexture == uStrawBedSprite ? directSprite(du, dv) : animatedSprite(vTexture, du, dv);
         vec3 tint = mix(mix(vTint0, vTint1, vCorner.x), mix(vTint3, vTint2, vCorner.x), vCorner.y);
         texel.rgb /= max(texel.a, 0.0001);
         if (mod(floor(vFlags / 4.0), 2.0) > 0.5) {

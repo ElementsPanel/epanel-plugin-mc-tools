@@ -11,7 +11,7 @@ const { loader } = require("./helpers.cjs");
 test("complete Three.js terrain shaders link within GPU limits and render fixed shading, original AO and smooth biome colors", async t => {
   const { sceneMaterials } = loader({
     three: { ...three, TextureLoader: class { load() { return new three.Texture(); } } },
-    "./minecraft-atlas": { minecraftAtlasUrl: () => "atlas.png" }
+    "./minecraft-atlas": { minecraftAtlasUrl: () => "atlas.png", strawBedUrl: () => "straw_bed.png" }
   })("panel/src/map/scene-materials.ts");
   const materials = sceneMaterials(0x19252a, false, () => {}, () => {});
   t.after(() => { materials[0].uniforms.uAtlas.value.dispose(); materials[0].uniforms.uAnimation.value.dispose(); materials.forEach(m => m.dispose()); });

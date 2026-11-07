@@ -263,6 +263,9 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
       const id = cell(x, y, z);
       if (!id) continue;
       const material = materials[id];
+      // Thin and multipart models (torches, campfires, beds, snow layers, composters)
+      // travel as one carrier quad and are expanded into their real elements by the client.
+      // Non-solid indented cubes such as dirt paths also let neighbours fill their step.
       if (material.model.shape === "model") { quad(x, y, z, 1, 1, 2, id); continue; }
       if (material.kind !== PLANT) continue;
       if (material.model.shape === "ground") quad(x, y, z, 1, 1, 2, id);

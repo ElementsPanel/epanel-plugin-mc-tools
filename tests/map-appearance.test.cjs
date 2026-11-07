@@ -6,6 +6,56 @@ const { meshScene } = load("daemon/src/backend/map/scene.ts");
 const { decodeScene } = load("panel/src/map/scene-codec.ts");
 const { SceneKind, SCENE_MODEL, sceneTextures } = load("shared/scene.ts");
 
+test("snow layers keep their layered thickness instead of rendering as full snow blocks", async () => {
+  const tile = async layers => ({ ...await meshScene([{ x: 0, z: 0, layers: [{ y: 0,
+    block: i => i === 0 ? "snow" : "air", properties: () => ({ layers: String(layers) }) }] }]), chunks: 1, warnings: 0 });
+  for (const layers of [1, 4, 8]) {
+    const mesh = decodeScene(await tile(layers)).meshes[0];
+    assert.equal(mesh.count, 6, `layers=${layers}`);
+    assert.equal(mesh.maxY, layers * 2 / 16, `layers=${layers}`);
+    assert.deepEqual(new Set([...mesh.sprites].map(sprite => sceneTextures.get(sprite)[0])), new Set(["block/snow"]));
+  }
+});
+
+test("water surfaces and dirt paths sit lower than a full block like vanilla", async () => {
+  const tile = async (name, properties = {}) => ({ ...await meshScene([{ x: 0, z: 0, layers: [{ y: 0,
+    block: i => i === 0 ? name : "air", properties: () => properties }] }]), chunks: 1, warnings: 0 });
+  const water = decodeScene(await tile("water")).meshes.find(mesh => mesh.kind === SceneKind.Translucent);
+  assert(water);
+  const tops = Array.from({ length: water.count }, (_, i) => i).filter(i => water.faces[i] === 2);
+  assert(tops.every(i => Math.abs(water.origins[i * 3 + 1] - 14 / 16) < 1e-6), "water top is two pixels low");
+  for (let i = 0; i < water.count; i++) if (water.faces[i] < 2 || water.faces[i] === 4 || water.faces[i] === 5)
+    assert.equal(water.sizes[i * 2 + 1], 14 / 16, "water sides stop at the lowered surface");
+  const path = decodeScene(await tile("dirt_path"));
+  assert.equal(Buffer.from((await tile("dirt_path")).quads, "base64").length, 16, "one model carrier");
+  assert.equal(path.meshes[0].count, 6); assert.equal(path.meshes[0].kind, SceneKind.Opaque);
+  assert.equal(path.meshes[0].maxY, 15 / 16);
+  assert.deepEqual(new Set([...path.meshes[0].sprites].map(sprite => sceneTextures.get(sprite)[0])),
+    new Set(["block/dirt_path_side", "block/dirt_path_top", "block/dirt"]));
+});
+
+test("campfires and straw beds expand their real models and keep their animated fire and facing", async () => {
+  const tile = async (name, properties = {}) => ({ ...await meshScene([{ x: 0, z: 0, layers: [{ y: 0,
+    block: i => i === 0 ? name : "air", properties: () => properties }] }]), chunks: 1, warnings: 0 });
+  const sprites = mesh => new Set([...mesh.sprites].map(sprite => sceneTextures.get(sprite)[0]));
+  const unlit = decodeScene(await tile("campfire", { facing: "south", lit: "false" }));
+  assert.equal(unlit.meshes[0].count, 28); assert.equal(unlit.meshes[0].kind, SceneKind.Cutout);
+  assert.deepEqual(sprites(unlit.meshes[0]), new Set(["block/campfire_log"]));
+  assert.equal(unlit.meshes[0].maxY, 7 / 16); assert.equal(unlit.animated, false);
+  const lit = decodeScene(await tile("campfire", { facing: "north", lit: "true" }));
+  assert.equal(lit.meshes[0].count, 32); assert(lit.animated);
+  assert.deepEqual(sprites(lit.meshes[0]), new Set(["block/campfire_log", "block/campfire_log_lit", "block/campfire_fire"]));
+  assert.equal(lit.meshes[0].maxY, 17 / 16);
+  const soul = decodeScene(await tile("soul_campfire", { facing: "east", lit: "true" }));
+  assert.deepEqual(sprites(soul.meshes[0]), new Set(["block/campfire_log", "block/soul_campfire_log_lit", "block/soul_campfire_fire"]));
+  const foot = decodeScene(await tile("straw_bed", { facing: "south", part: "foot" }));
+  assert.equal(foot.meshes[0].count, 11); assert.deepEqual(sprites(foot.meshes[0]), new Set(["block/straw_bed"]));
+  assert.equal(foot.meshes[0].maxY, 4 / 16);
+  const head = decodeScene(await tile("straw_bed", { facing: "west", part: "head" }));
+  assert.equal(head.meshes[0].count, 32); assert.equal(head.meshes[0].maxY, 5 / 16);
+  assert(head.meshes[0].maxY > foot.meshes[0].maxY, "the pillow is taller than the foot");
+});
+
 test("torches and composters expand their real thin model geometry instead of textured cubes", async () => {
   const tile = async (name, properties = {}) => ({ ...await meshScene([{ x: 0, z: 0, layers: [{ y: 0,
     block: i => i === 0 ? name : "air", properties: () => properties }] }]), chunks: 1, warnings: 0 });

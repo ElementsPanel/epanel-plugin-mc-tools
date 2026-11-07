@@ -4,6 +4,12 @@ import { modelFaces, sceneModels } from "./model-geometry";
 
 const flowerTextures = new Map([...sceneTextures].flatMap(([sprite, [name]]) =>
   /^block\/(pink_petals|wildflowers)(_stem)?$/.test(name) ? [[sprite, !name.endsWith("_stem")] as const] : []));
+/** Water sprites are the fluid pass; a lowered surface keeps shores looking vanilla. */
+// Snow layers arrive as model carriers from the shared catalog, so their layered
+// height is expanded here alongside every other thin block model.
+const waterSprites = new Set([...sceneTextures].flatMap(([sprite, [name]]) =>
+  name === "block/water_still" || name === "block/water_flow" ? [sprite] : []));
+const WATER_DROP = 2 / 16;
 
 function bytes(value: string, maximum: number) {
   if (typeof value !== "string" || value.length > Math.ceil(maximum / 3) * 4) throw new Error("MC_MAP_CORRUPT");
@@ -94,7 +100,8 @@ export function decodeScene(tile: MapSceneTile, parts?: SceneParts) {
       raw[offset + 15] = 0;
       groups[SceneKind.Plant].push(offset);
     } else groups[kind].push(offset);
-    animated ||= (sceneTextures.get(model ? model.faces[2] : texture)?.[2] ?? 0) > 1;
+    animated ||= (sceneTextures.get(model ? model.faces[2] : texture)?.[2] ?? 0) > 1
+      || (model?.elements?.some(element => Object.values(element.faces).some(face => (sceneTextures.get(face.texture)?.[2] ?? 0) > 1)) ?? false);
   }
   let expanded = 0;
   const meshes = groups.flatMap((offsets, kind) => {
@@ -122,8 +129,17 @@ export function decodeScene(tile: MapSceneTile, parts?: SceneParts) {
     const faces = new Uint8Array(count), flags = new Uint8Array(count), occlusion = new Uint8Array(count);
     let minY = Infinity, maxY = -Infinity;
     entries.forEach(({ offset, model }, quad) => {
-      const x = raw[offset] + (model?.origin[0] ?? 0), z = raw[offset + 1] + (model?.origin[2] ?? 0), y = data.getInt16(offset + 2, true) + (model?.origin[1] ?? 0);
-      const w = model?.size[0] ?? data.getUint16(offset + 4, true), h = model?.size[1] ?? data.getUint16(offset + 6, true), face = model?.face ?? raw[offset + 8];
+      const x = raw[offset] + (model?.origin[0] ?? 0), z = raw[offset + 1] + (model?.origin[2] ?? 0);
+      let y = data.getInt16(offset + 2, true) + (model?.origin[1] ?? 0);
+      let w = model?.size[0] ?? data.getUint16(offset + 4, true), h = model?.size[1] ?? data.getUint16(offset + 6, true);
+      const face = model?.face ?? raw[offset + 8];
+      const wireTexture = data.getUint16(offset + 10, true);
+      // Water is a full cube in the wire format; lower its liquid surface and the
+      // top edge of its side faces to the vanilla source height.
+      if (!model && waterSprites.has(wireTexture)) {
+        if (face === 2) y -= WATER_DROP;
+        else if (face !== 3 && face < 6) h = Math.max(0, h - WATER_DROP);
+      }
       origins.set([x, y, z], quad * 3); sizes.set([w, h], quad * 2);
       colors.set(raw.subarray(offset + 12, offset + 15), quad * 3);
       for (let corner = 0; corner < 4; corner++) {
@@ -132,7 +148,7 @@ export function decodeScene(tile: MapSceneTile, parts?: SceneParts) {
       }
       uvU.set(model?.uvU ?? [0, 1, 0], quad * 3); uvV.set(model?.uvV ?? [0, 0, 1], quad * 3);
       if (model?.axes) model.axes.forEach((axis, i) => axes![i].set(axis, quad * 3));
-      sprites[quad] = model?.texture ?? data.getUint16(offset + 10, true); faces[quad] = face;
+      sprites[quad] = model?.texture ?? wireTexture; faces[quad] = face;
       flags[quad] = (raw[offset + 9] & 63) | (model?.axes ? SCENE_AXES : 0);
       occlusion[quad] = model?.axes ? 0 : raw[offset + 15];
       const baseY = data.getInt16(offset + 2, true);

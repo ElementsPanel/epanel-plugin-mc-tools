@@ -55,8 +55,9 @@ export function blockMaterial(block: string, biome = "minecraft:plains", propert
   // Keep ground cover flat even when an older asset catalog lacks its shape.
   const model: MinecraftBlock = groundPlants.has(name) && sourceModel.shape !== "ground" ? { ...sourceModel, shape: "ground" } : sourceModel;
   const colors = minecraftAssets.biomes[biome] ?? minecraftAssets.biomes["minecraft:plains"];
-  const biomeTint = name === "leaf_litter" ? 3 : foliageTint.has(name) ? 1 : grassTint.has(name) ? 0 : undefined;
+  const biomeTint = name === "water" ? 2 : name === "leaf_litter" ? 3 : foliageTint.has(name) ? 1 : grassTint.has(name) ? 0 : undefined;
   const color = blockTintColor(name, colors);
+  // Indented cubes such as dirt paths keep their real 15/16 model height.
   const kind = model.fire || plants.test(name) || model.shape === "ground" || model.shape === "cross" ? SceneKind.Plant : model.kind;
   return { name, color, model, biomeTint, kind,
     ...(model.fire ? { fire: fireConnections(properties) } : {}),

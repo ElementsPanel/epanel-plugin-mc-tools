@@ -161,7 +161,7 @@ test("26.3 dappled forest uses its own grass, foliage and water colors through N
   }
 });
 
-test("grass and foliage transition across biome borders while preserving interior colors and untinted faces", async () => {
+test("grass, foliage and water transition across biome borders while preserving interior colors and untinted faces", async () => {
   const { chunkLayers } = load("daemon/src/backend/map/chunk.ts");
   let packed = 0n;
   for (let i = 0; i < 64; i++) if ((i & 3) >= 2) packed |= 1n << BigInt(i);
@@ -176,15 +176,13 @@ test("grass and foliage transition across biome borders while preserving interio
     const tops = faces.filter(face => face.face === 2);
     const color = x => tops.find(face => x >= face.x && x < face.x + face.h && face.z <= 7 && face.z + face.w > 7).tint;
     assert.equal(color(0), first); assert.equal(color(15), second);
-    if (block !== "water") {
-      assert.equal(new Set(Array.from({ length: 8 }, (_, i) => color(i + 4))).size, 8, "the transition has intermediate colors, not a hard boundary");
-      for (let x = 5; x <= 10; x++) for (const shift of [16, 8, 0]) {
-        const a = (first >> shift) & 255, b = (second >> shift) & 255;
-        const before = (color(x - 1) >> shift) & 255, now = (color(x) >> shift) & 255;
-        assert(now >= Math.min(a, b) && now <= Math.max(a, b));
-        assert(b > a ? now >= before : now <= before, "each color channel changes monotonically");
-      }
-    } else { assert.equal(color(7), first); assert.equal(color(8), second); }
+    assert.equal(new Set(Array.from({ length: 8 }, (_, i) => color(i + 4))).size, 8, "the transition has intermediate colors, not a hard boundary");
+    for (let x = 5; x <= 10; x++) for (const shift of [16, 8, 0]) {
+      const a = (first >> shift) & 255, b = (second >> shift) & 255;
+      const before = (color(x - 1) >> shift) & 255, now = (color(x) >> shift) & 255;
+      assert(now >= Math.min(a, b) && now <= Math.max(a, b));
+      assert(b > a ? now >= before : now <= before, "each color channel changes monotonically");
+    }
     if (block === "grass_block") {
       assert(faces.filter(face => face.face === 3).every(face => face.tint === 0xffffff), "the dirt underside is not biome tinted");
       assert(faces.filter(face => face.face === 4).some(face => face.tint !== first && face.tint !== second && face.flags & SCENE_GRASS_OVERLAY), "the grass side overlay also blends");

@@ -267,6 +267,7 @@ export class SceneViewport implements MapRenderer {
     for (const tile of [...this.cache.values()]) this.remove(tile);
     this.displayed.clear(); this.pending.clear(); this.failed.clear(); this.skipped.clear();
     this.materials[0].uniforms.uAtlas.value.dispose(); this.materials[0].uniforms.uAnimation.value.dispose();
+    (this.materials[0].uniforms.uStrawBed?.value as { dispose?(): void } | undefined)?.dispose?.();
     for (const material of this.materials) material.dispose();
     this.clouds?.dispose();
     this.scene.clear();

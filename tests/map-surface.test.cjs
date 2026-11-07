@@ -118,9 +118,10 @@ test("water shows the seabed through it and biome tints blend across borders", (
   const water = renderSurface([sea], 16).pixels, sand = renderSurface([world((x, y) => y < 60 ? "minecraft:sand" : "minecraft:air", undefined, [3])(0, 0)], 16).pixels;
   assert.equal(water[3], 255);
   assert.notDeepEqual(water.subarray(0, 3), sand.subarray(0, 3));
-  // Water is tinted by its own biome; a 7×7 blend would smear the border instead.
-  assert.deepEqual(water.subarray(0, 4), water.subarray(7 * 4, 7 * 4 + 4));
+  // Water now uses the same 7×7 biome blend as grass, so the border fades.
+  const red = x => water[x * 4];
+  assert(red(0) !== red(15) && Math.abs(red(7) - red(8)) < Math.abs(red(0) - red(15)), "water fades between biomes");
   const grass = world((x, y) => y < 64 ? "minecraft:grass_block" : "minecraft:air", x => x < 8 ? "minecraft:plains" : "minecraft:swamp", [3])(0, 0);
-  const field = renderSurface([grass], 16).pixels, red = x => field[x * 4];
-  assert(red(0) !== red(15) && red(6) !== red(7) && Math.abs(red(7) - red(8)) < Math.abs(red(0) - red(15)), "grass fades between biomes");
+  const field = renderSurface([grass], 16).pixels, grassRed = x => field[x * 4];
+  assert(grassRed(0) !== grassRed(15) && grassRed(6) !== grassRed(7) && Math.abs(grassRed(7) - grassRed(8)) < Math.abs(grassRed(0) - grassRed(15)), "grass fades between biomes");
 });

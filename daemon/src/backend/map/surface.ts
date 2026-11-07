@@ -212,7 +212,7 @@ export function renderSurface(chunks: readonly SurfaceChunk[], size: number, net
       }
       if (aboveFluid && !fluid && !block.opaque) face(water.color, waterTint, water.alpha, shadeBottom, y + 1);
       if (fluid && !aboveFluid && !block.opaque) {
-        waterTint = blockTintColor("water", palette(biome()));
+        waterTint = tintOf(water, x, y, z, biome());
         face(water.color, waterTint, water.alpha, shadeTop, y);
       }
       if (block.shape === Shape.Cube && !(above.solid && (above.slot === block.slot || above.opaque))) {

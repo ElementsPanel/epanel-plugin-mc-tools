@@ -54,7 +54,7 @@ test("terrain textures premultiply before mip filtering and water remains visibl
   const texture = new three.Texture();
   const { sceneMaterials } = loader({
     three: { ...three, TextureLoader: class { load() { return texture; } } },
-    "./minecraft-atlas": { minecraftAtlasUrl: () => "atlas.png" }
+    "./minecraft-atlas": { minecraftAtlasUrl: () => "atlas.png", strawBedUrl: () => "straw_bed.png" }
   })("panel/src/map/scene-materials.ts");
   const materials = sceneMaterials(0xbad8f3, false, () => {}, () => {});
   assert.equal(texture.premultiplyAlpha, true);

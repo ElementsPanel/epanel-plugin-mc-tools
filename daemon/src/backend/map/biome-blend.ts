@@ -2,7 +2,7 @@ import { MAP_SCENE_SIZE } from "../../../../shared/map";
 import { minecraftAssets } from "../../../../shared/scene";
 import type { BlockLayer } from "./chunk";
 
-export type BiomeTint = 0 | 1 | 3;
+export type BiomeTint = 0 | 1 | 2 | 3;
 const RADIUS = 3, HALO = 1, PAD = RADIUS + HALO;
 const UNKNOWN = 0x1000000;
 
