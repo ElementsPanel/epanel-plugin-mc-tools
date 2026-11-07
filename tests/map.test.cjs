@@ -318,6 +318,23 @@ test("Nether surface skips the bedrock ceiling and selects the terrain below an 
 
 });
 
+test("MCDR nested server roots are discovered and their worlds are mapped", async (t) => {
+  const root = await temporary(t), server = path.join(root, "server");
+  await fs.mkdir(path.join(root, "plugins"), { recursive: true });
+  await fs.mkdir(server, { recursive: true });
+  await fs.writeFile(path.join(server, "server.properties"), "level-name=world");
+  await writeRegion(path.join(server, "world", "dimensions", "minecraft", "overworld"), 0, 0, javaChunk());
+  await writeRegion(path.join(server, "world_nether"), 0, 0, javaChunk("netherrack"));
+  const worlds = await discoverWorlds(instance(root));
+  assert.equal(worlds.length, 2);
+  const overworld = worlds.find(world => world.dimension === "minecraft:overworld");
+  const nether = worlds.find(world => world.dimension === "minecraft:the_nether");
+  assert(overworld && nether);
+  assert.equal(overworld.root, await fs.realpath(server));
+  assert.match(overworld.directory, /server[/\\]world[/\\]dimensions[/\\]minecraft[/\\]overworld$/);
+  assert.match(nether.directory, /server[/\\]world_nether$/);
+});
+
 test("world discovery and file reads reject traversal and symlinks outside the instance", async (t) => {
   const root = await temporary(t), outside = await temporary(t);
   await writeRegion(outside, 0, 0, javaChunk());

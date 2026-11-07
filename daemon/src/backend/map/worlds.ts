@@ -63,15 +63,48 @@ function worldSpawn(info: any, dimension: string) {
   return { x: coordinate(modern ? position[0] : info.SpawnX), z: coordinate(modern ? position[2] : info.SpawnZ) };
 }
 
+const SERVER_SKIP = new Set(["plugins", "logs", "cache", "config", "libraries", "versions", "mods", "backups", ".git", "node_modules",
+  "region", "entities", "poi", "data", "playerdata", "stats", "advancements", "datapacks", "db", "dimensions", "DIM-1", "DIM1",
+  "world", "worlds", "world_nether", "world_the_end"]);
+
+/** MCDR keeps the real server in a nested working directory (usually `server/`). */
+async function javaServerRoots(instanceRoot: string) {
+  const found: string[] = [];
+  const markers = new Set(["world", "world_nether", "world_the_end", "worlds"]);
+  let scanned = 0;
+  const visit = async (directory: string, depth: number) => {
+    if (found.length >= 8 || ++scanned > 256) return;
+    let entries;
+    try { entries = await fs.readdir(directory, { withFileTypes: true }); } catch { return; }
+    const properties = entries.some(item => item.isFile() && item.name === "server.properties");
+    const marker = entries.some(item => item.isDirectory() && markers.has(item.name));
+    if (directory !== instanceRoot && (properties || marker)) { found.push(directory); return; }
+    if (depth >= 3) return;
+    for (const item of entries.slice(0, 128)) if (item.isDirectory() && !item.name.startsWith(".") && !SERVER_SKIP.has(item.name))
+      await visit(path.join(directory, item.name), depth + 1);
+  };
+  await visit(instanceRoot, 0);
+  return [instanceRoot, ...found];
+}
+
 export async function discoverWorlds(instance: { config: { type?: string }; absoluteCwdPath(): string }): Promise<SavedWorld[]> {
   const type = String(instance.config.type);
   const bedrock = type.startsWith("minecraft/bedrock");
   if ((!type.startsWith("minecraft/java") && !bedrock) || type.includes("bungeecord")) {
     throw new Error("MC_MAP_UNSUPPORTED_INSTANCE");
   }
-  const root = await fs.realpath(instance.absoluteCwdPath());
+  const instanceRoot = await fs.realpath(instance.absoluteCwdPath());
+  const worlds: SavedWorld[] = [];
+  const seen = new Set<string>();
+  for (const serverRoot of bedrock ? [instanceRoot] : await javaServerRoots(instanceRoot))
+    await discoverAt(serverRoot, bedrock, instanceRoot, worlds, seen);
+  return worlds;
+}
+
+async function discoverAt(root: string, bedrock: boolean, instanceRoot: string, worlds: SavedWorld[], seen: Set<string>) {
   const entries = await fs.readdir(root, { withFileTypes: true });
   const candidates = [root, ...entries.filter((item) => item.isDirectory() && !item.name.startsWith(".")).slice(0, 128).map((item) => path.join(root, item.name))];
+  let scanned = 0;
   if (bedrock) {
     try {
       const directory = await safePath(root, "worlds");
@@ -87,10 +120,8 @@ export async function discoverWorlds(instance: { config: { type?: string }; abso
       candidates.unshift(await safePath(root, bedrock ? "worlds" : ".", name));
     }
   } catch { /* Default and Bukkit world folders can be discovered without properties. */ }
-  const worlds: SavedWorld[] = [];
-  const seen = new Set<string>();
-  let scanned = 0;
   for (const base of new Set(candidates)) {
+    if (worlds.length >= 128) return;
     if (bedrock) {
       try {
         const directory = await safePath(root, base);
@@ -101,7 +132,7 @@ export async function discoverWorlds(instance: { config: { type?: string }; abso
         for (const [dimensionId, dimension] of ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"].entries()) {
           if (worlds.length >= 128) break;
           worlds.push({
-            id: createHash("sha256").update(path.relative(root, directory) + ":bedrock:" + dimensionId).digest("hex").slice(0, 24),
+            id: createHash("sha256").update(path.relative(instanceRoot, directory) + ":bedrock:" + dimensionId).digest("hex").slice(0, 24),
             name: String(info.LevelName || path.basename(directory)).slice(0, 100),
             dimension, dimensionId, edition: "bedrock", directory, root,
             spawn: worldSpawn(info, dimension)
@@ -120,7 +151,7 @@ export async function discoverWorlds(instance: { config: { type?: string }; abso
         if (seen.has(region) || !(await fs.stat(region)).isDirectory()) return false;
         const actual = await safePath(root, directory);
         info ??= await levelInfo(root, base);
-        const relative = path.relative(root, actual).split(path.sep).join("/");
+        const relative = path.relative(instanceRoot, actual).split(path.sep).join("/");
         worlds.push({
           id: createHash("sha256").update(relative).digest("hex").slice(0, 24),
           name: String(info.LevelName || path.basename(base)).slice(0, 100),
@@ -135,10 +166,13 @@ export async function discoverWorlds(instance: { config: { type?: string }; abso
         return true;
       } catch { return false; /* A world or dimension need not contain saved regions yet. */ }
     };
+    const baseName = path.basename(base);
+    const standalone = baseName.endsWith("_nether") ? "minecraft:the_nether" : baseName.endsWith("_the_end") ? "minecraft:the_end" : "minecraft:overworld";
     for (const [name, legacy] of [["overworld", ""], ["the_nether", "DIM-1"], ["the_end", "DIM1"]]) {
       const dimension = "minecraft:" + name;
-      if (!await add(path.join(base, "dimensions", "minecraft", name), dimension)) await add(path.join(base, legacy), dimension);
+      if (!await add(path.join(base, "dimensions", "minecraft", name), dimension) && legacy) await add(path.join(base, legacy), dimension);
     }
+    await add(base, standalone);
     const scan = async (directory: string, parts: string[], depth: number) => {
       if (depth > 4 || worlds.length >= 128 || ++scanned > 512) return;
       let children;
@@ -151,5 +185,4 @@ export async function discoverWorlds(instance: { config: { type?: string }; abso
     };
     await scan(path.join(base, "dimensions"), [], 0);
   }
-  return worlds;
 }
