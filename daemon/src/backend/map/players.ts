@@ -175,8 +175,10 @@ export class MapPlayerService {
     return session;
   }
 
-  async list(id: string, worldId?: string): Promise<MapPlayerRoster> {
-    const instance = this.instance(id), key = id + ":" + instance.absoluteCwdPath();
+  /** `time: false` skips the RCON clock query and returns no time at all. */
+  async list(id: string, worldId?: string, options: { time?: boolean } = {}): Promise<MapPlayerRoster> {
+    const sense = options.time !== false;
+    const instance = this.instance(id), key = id + ":" + instance.absoluteCwdPath() + (sense ? "" : ":clock");
     if (this.enabling.has(id)) throw new Error("MC_MAP_RCON_BUSY");
     const cached = this.cache.get(key);
     let value: MapPlayerRoster;
@@ -186,7 +188,7 @@ export class MapPlayerService {
       if (!pending) {
         if (this.pending.size >= 16) throw new Error("MC_MAP_RCON_BUSY");
         const revision = this.revision;
-        pending = this.read(id, instance).then(value => {
+        pending = this.read(id, instance, sense).then(value => {
           if (!this.disposed && revision === this.revision) {
             this.cache.set(key, { at: Date.now(), value });
             if (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!);
@@ -199,11 +201,15 @@ export class MapPlayerService {
     }
     if (!worldId) return value;
     if (!(await this.worlds(id)).some(world => world.id === worldId)) throw new Error("MC_MAP_WORLD_MISSING");
-    return { ...value, players: value.players.filter(player => player.position?.world === worldId),
-      worldTimes: value.worldTimes?.[worldId] === undefined ? {} : { [worldId]: value.worldTimes[worldId] } };
+    const filtered: MapPlayerRoster = { ...value, players: value.players.filter(player => player.position?.world === worldId) };
+    // A roster without any clock (time:false) omits the field so the browser keeps
+    // extrapolating; a world without a sample still reports an empty object.
+    if (value.worldTimes === undefined) { delete filtered.worldTimes; delete filtered.worldTimeSampledAt; }
+    else filtered.worldTimes = value.worldTimes[worldId] === undefined ? {} : { [worldId]: value.worldTimes[worldId] };
+    return filtered;
   }
 
-  private async read(id: string, instance: Instance): Promise<MapPlayerRoster> {
+  private async read(id: string, instance: Instance, sense = true): Promise<MapPlayerRoster> {
     const edition = instance.config.type?.startsWith("minecraft/bedrock") ? "bedrock" : "java";
     const roster: MapPlayerRoster = { edition, running: instance.status() === 3, rconEnabled: false, players: [], warnings: [] };
     // Chat is watched from the first map request, even when RCON stays off.
@@ -220,9 +226,12 @@ export class MapPlayerService {
     try {
       const worlds = await this.worlds(id);
       session = this.session(id, instance, root, target);
-      Object.assign(roster, await session.connection.run(async command => ({
-        ...await readRconPlayers(command), worldTimes: await readRconWorldTimes(command, worlds, target.levelName), worldTimeSampledAt: Date.now()
-      })));
+      Object.assign(roster, await session.connection.run(async command => {
+        const live = await readRconPlayers(command);
+        // The browser calibrates once per page visit; later reads only need the roster.
+        if (!sense) return live;
+        return { ...live, worldTimes: await readRconWorldTimes(command, worlds, target.levelName), worldTimeSampledAt: Date.now() };
+      }));
       session.abort.signal.throwIfAborted();
       for (const player of roster.players) if (player.position) player.position.world = playerWorld(worlds, player.position.dimension, target.levelName)?.id;
     } catch (error) {

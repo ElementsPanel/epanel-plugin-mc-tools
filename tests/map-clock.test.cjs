@@ -41,10 +41,38 @@ test("clock estimates independent world rates and clears unavailable, offline an
   const f = fixture(t); f.sample(0, 0, { worldTimes: { world: 0, moon: 100 } });
   f.advance(3000); f.sample(30, 3000, { worldTimes: { world: 30, moon: 220 } });
   f.advance(4000); assert.deepEqual(f.state.times, { world: 40, moon: 260 });
-  f.advance(20000); assert.deepEqual(f.state.times, { world: 130, moon: 620 }, "a stalled read has a bounded extrapolation window");
+  f.advance(20000); assert.deepEqual(f.state.times, { world: 200, moon: 900 }, "the clock keeps running from its only calibration");
   for (const extra of [{ running: false }, { rconEnabled: false }, { worldTimes: {} }, { worldTimes: { world: NaN } }]) {
     f.sample(100, 20000, extra); assert.deepEqual(f.state.times, {});
   }
+  // A roster without worldTimes means "already calibrated": keep counting.
+  f.sample(0, 21000); f.advance(22000);
+  const before = f.state.times.world;
+  f.roster.value = { edition: "java", running: true, rconEnabled: true, players: [], warnings: [] };
+  f.advance(23000);
+  assert.equal(f.state.times.world, before + 20, "an uncalibrated read keeps the local clock");
   f.roster.value = undefined; assert.deepEqual(f.state.times, {});
   f.sample(0, 21000); assert.equal(f.state.times.world, 0, "recovery starts from a fresh sample");
+});
+
+test("the roster is calibrated once per visit and later polls only ask for players", async (t) => {
+  const intervals = [];
+  t.mock.method(globalThis, "setInterval", (fn, delay) => { intervals.push({ fn, delay }); return intervals.length; });
+  t.mock.method(globalThis, "clearInterval", () => {});
+  const { useMapPlayers } = loader({ "../settings": { t: (key) => key } })("panel/src/map/player-state.ts");
+  const calls = [];
+  const roster = { edition: "java", running: true, rconEnabled: true, players: [], warnings: [], worldTimes: { world: 6000 }, worldTimeSampledAt: 0 };
+  const api = { players: async (signal, time) => { calls.push(time); return roster; } };
+  const renderer = vue.createRenderer({ createComment: () => ({}), insert() {}, remove() {}, parentNode: () => null, nextSibling: () => null });
+  const app = renderer.createApp({ setup: () => useMapPlayers(api, (error) => String(error)), render: () => null });
+  app.mount({}); t.after(() => app.unmount());
+  const poll = intervals.find((item) => item.delay === 3000).fn;
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [true], "the first read asks for an RCON calibration");
+  poll();
+  await new Promise((resolve) => setImmediate(resolve));
+  poll();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [true, false, false], "later polls never query the clock again");
 });

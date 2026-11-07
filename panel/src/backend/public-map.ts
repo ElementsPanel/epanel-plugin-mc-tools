@@ -64,7 +64,7 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         const node = ctx.remote.services.getInstance(source.daemonId);
         if (!node?.available) throw new Error("MC_MAP_NODE_OFFLINE");
         const data: Record<string, unknown> = { instanceUuid: source.instanceUuid };
-        if (event === MAP_PLAYERS_EVENT) data.world = source.world;
+        if (event === MAP_PLAYERS_EVENT) Object.assign(data, { world: source.world, time: request.query.time !== "0" });
         else if (event !== MAP_WORLDS_EVENT) {
           const coordinate = event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate;
           Object.assign(data, { world: source.world, x: integer(request.query.x, coordinate), z: integer(request.query.z, coordinate) });

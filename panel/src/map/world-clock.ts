@@ -10,6 +10,8 @@ export function useWorldClock(roster: Ref<MapPlayerRoster | undefined>) {
   watch(() => [roster.value?.worldTimes, roster.value?.worldTimeSampledAt, roster.value?.running, roster.value?.rconEnabled], () => {
     const value = roster.value, next = new Map<string, Sample>();
     now.value = performance.now();
+    // A roster without samples is not a new anchor: keep counting from the last one.
+    if (value && value.worldTimes === undefined) return;
     if (value?.running && value.rconEnabled) {
       const sampledAt = value.worldTimeSampledAt ?? now.value;
       for (const [world, ticks] of Object.entries(value.worldTimes ?? {})) {
@@ -30,8 +32,8 @@ export function useWorldClock(roster: Ref<MapPlayerRoster | undefined>) {
     samples.value = next;
   }, { immediate: true, deep: true, flush: "sync" });
   const times = computed(() => Object.fromEntries([...samples.value].map(([world, sample]) => {
-    // Do not keep extrapolating indefinitely while a read is stalled.
-    const elapsed = Math.max(0, Math.min(10, (now.value - sample.receivedAt) / 1000));
+    // The clock runs from its single calibration until the page is reloaded.
+    const elapsed = Math.max(0, (now.value - sample.receivedAt) / 1000);
     return [world, Math.floor(sample.ticks + elapsed * sample.rate) % 24000];
   })));
   const update = () => { if (typeof document === "undefined" || !document.hidden) now.value = performance.now(); };

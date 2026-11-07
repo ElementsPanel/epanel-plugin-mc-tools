@@ -391,6 +391,41 @@ test("map player routes enforce login and instance access, and forward only expl
   await request("POST /rcon/enable", { logged: true, allowed: true });
   assert.deepEqual(calls, [{ event: "mc-tools/map/rcon-enable", data: { instanceUuid: "server", confirmed: true } }]);
   await request("GET /players", { logged: true, allowed: true });
-  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/players", data: { instanceUuid: "server" } });
+  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/players", data: { instanceUuid: "server", time: true } });
   disposal.forEach(callback => callback());
+});
+
+test("world time is sampled once per visit and later reads reuse the roster without querying RCON", async (t) => {
+  const f = await fixture(t, "enable-rcon=true\nrcon.password=test\n");
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const timeCommands = () => f.reads.flatMap(read => read.commands).filter(command => command.includes("time query"));
+
+  const first = await f.service.list("server");
+  assert.deepEqual(first.worldTimes, { main: 6000, nether: 6000 });
+  assert.equal(timeCommands().length, 2, "one query per world on the calibrating read");
+
+  // Later reads skip the query and carry no clock, so the browser keeps its anchor.
+  now += 3000;
+  const second = await f.service.list("server", undefined, { time: false });
+  assert.equal(timeCommands().length, 2, "no RCON time query after calibration");
+  assert.equal(second.worldTimes, undefined);
+  assert.equal(second.worldTimeSampledAt, undefined);
+  assert.equal(second.running, true, "the roster itself is still live");
+  assert.deepEqual(second.players.map(player => player.name), ["Steve", "Alex"]);
+  assert.equal((await f.service.list("server", "nether", { time: false })).worldTimes, undefined);
+  assert.equal(timeCommands().length, 2);
+
+  // A new visit asks again once the short roster cache expired.
+  now += 3000;
+  await f.service.list("server", undefined, { time: true });
+  assert.equal(timeCommands().length, 4, "a fresh calibration queries the clock again");
+});
+
+test("a failed calibration leaves no clock for the browser to show", async (t) => {
+  const f = await fixture(t);
+  const roster = await f.service.list("server");
+  assert.equal(roster.rconEnabled, false);
+  assert.equal(roster.worldTimes, undefined);
+  assert.deepEqual((await f.service.list("server", "main", { time: false })).worldTimes, undefined);
 });

@@ -41,7 +41,7 @@ export function worldMapApi(instanceUuid: string, daemonId: string) {
   const api = authenticatedRequests();
   const scope = { uuid: instanceUuid, daemonId };
   return {
-    players: (signal: AbortSignal) => api.request<MapPlayerRoster>("players", scope, signal),
+    players: (signal: AbortSignal, time = true) => api.request<MapPlayerRoster>("players", { ...scope, time: time ? "1" : "0" }, signal),
     enableRcon: (signal: AbortSignal) => api.request<EnableRconResult>("rcon/enable", scope, signal, { confirmed: true }, "POST"),
     publicLinks: (signal: AbortSignal) => api.request<PublicMapLinks>("public/links", scope, signal),
     worlds: (signal: AbortSignal, refresh = false) => {
@@ -83,7 +83,7 @@ export const publicMapCatalog = (signal: AbortSignal) => publicRequest<PublicMap
 
 export function publicWorldMapApi(map: string) {
   return {
-    players: (signal: AbortSignal) => publicRequest<MapPlayerRoster>("players", { map }, signal),
+    players: (signal: AbortSignal, time = true) => publicRequest<MapPlayerRoster>("players", { map, time: time ? "1" : "0" }, signal),
     worlds: (signal: AbortSignal, refresh = false) => publicRequest<MapWorld[]>("worlds", { map, refresh: refresh ? "1" : "0" }, signal),
     scene: (_world: string, x: number, z: number, signal: AbortSignal) => publicRequest<MapSceneTile>("scene", {
       map, x: String(x), z: String(z)

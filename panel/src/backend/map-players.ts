@@ -15,7 +15,7 @@ export function registerMapPlayerRoutes(ctx: MapPanelContext) {
       if (enable) {
         if (request.request.body?.confirmed !== true) throw new Error("MC_MAP_INVALID");
         data.confirmed = true;
-      }
+      } else data.time = request.query.time !== "0";
       request.body = await new ctx.remote.Request(node).request(enable ? MAP_RCON_ENABLE_EVENT : MAP_PLAYERS_EVENT, data, 15_000);
     } catch (error) { request.body = error; }
   };

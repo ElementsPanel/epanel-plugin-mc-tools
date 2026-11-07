@@ -20,7 +20,7 @@ export function registerWorldMap(ctx: McToolsDaemonContext) {
         if (event === MAP_RCON_ENABLE_EVENT) ctx.protocol.response(request, await players.enable(data.instanceUuid, data.confirmed));
         else if (event === MAP_PLAYERS_EVENT) {
           if (data.world !== undefined && (typeof data.world !== "string" || !/^[a-f0-9]{24}$/.test(data.world))) throw new Error("MC_MAP_INVALID");
-          ctx.protocol.response(request, await players.list(data.instanceUuid, data.world as string | undefined));
+          ctx.protocol.response(request, await players.list(data.instanceUuid, data.world as string | undefined, { time: data.time !== false }));
         } else if (event === MAP_WORLDS_EVENT) {
           const worlds = await service.worlds(data.instanceUuid, data.refresh === true);
           ctx.protocol.response(request, worlds.map(({ id, name, dimension, spawn }) => ({ id, name, dimension, spawn })));

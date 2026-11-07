@@ -245,9 +245,9 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
       </VList>
     </MapControls>
     <div class="mc-map-surface">
-      <div v-if="current && !loading" class="mc-map-time" role="timer" :aria-label="worldTimeLabel" :title="worldTimeLabel">
+      <div v-if="current && !loading && worldTime" class="mc-map-time" role="timer" :aria-label="worldTimeLabel" :title="worldTimeLabel">
         <VIcon :icon="worldTimeIcon" size="18" aria-hidden="true" />
-        <span>{{ worldTime ?? '--:--' }}</span>
+        <span>{{ worldTime }}</span>
       </div>
       <div v-if="error || state.warnings || state.limited || playerError || playerSuccess" class="mc-map-notice">
         <VAlert v-if="error" type="error" density="compact" role="alert">{{ error }}</VAlert>

@@ -110,7 +110,7 @@ test("public player reads are scoped to the published world and aliases, and rev
   assert.equal(result.players[0].position.world, "survival");
   assert.deepEqual(result.worldTimes, { survival: 0 });
   assert(!JSON.stringify(result).includes(hiddenWorld));
-  assert.deepEqual(f.calls[0], { event: "mc-tools/map/players", data: { instanceUuid: "server", world } });
+  assert.deepEqual(f.calls[0], { event: "mc-tools/map/players", data: { instanceUuid: "server", world, time: true } });
   const gate = deferred(); f.respond(() => gate.promise);
   const read = f.request("/players", { map: "survival" });
   f.configure({ mapPageEnabled: false }); gate.resolve(result);

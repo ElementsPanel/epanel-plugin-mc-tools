@@ -4,7 +4,8 @@ import { t } from "../settings";
 import { useWorldClock } from "./world-clock";
 
 export interface MapPlayersApi {
-  players?(signal: AbortSignal): Promise<MapPlayerRoster>;
+  /** `time` asks the daemon to calibrate the world clock over RCON. */
+  players?(signal: AbortSignal, time?: boolean): Promise<MapPlayerRoster>;
   enableRcon?(signal: AbortSignal): Promise<EnableRconResult>;
 }
 
@@ -13,6 +14,8 @@ export function useMapPlayers(api: MapPlayersApi, errorText: (error: unknown) =>
   const worldTimes = useWorldClock(roster);
   const error = ref(""), success = ref(""), search = ref("");
   const abort = new AbortController();
+  // One RCON calibration per page visit; the browser extrapolates afterwards.
+  let calibrated = false;
   let prompted = false, timer: ReturnType<typeof setInterval> | undefined;
   let enableError = "";
   const players = computed(() => (roster.value?.players ?? []).filter(player => player.name.toLowerCase().includes(search.value.trim().toLowerCase())));
@@ -20,8 +23,9 @@ export function useMapPlayers(api: MapPlayersApi, errorText: (error: unknown) =>
     if (!api.players || reading.value || enabling.value || prompt.value || abort.signal.aborted) return;
     reading.value = true;
     try {
-      const value = await api.players(abort.signal);
+      const value = await api.players(abort.signal, !calibrated);
       if (abort.signal.aborted) return;
+      calibrated = true;
       roster.value = value; error.value = enableError;
       if (api.enableRcon && value.edition === "java" && !value.rconEnabled && !prompted) { prompted = true; prompt.value = true; }
     } catch (reason) {
