@@ -373,6 +373,25 @@ test("switching projections cancels real OrbitControls inertia without changing 
   near(f.view.viewCamera.position.distanceTo(position), 0);
 });
 
+test("flat 2D layer maps onto the moving transition camera so it fades with the perspective", t => {
+  const f = sceneFixture(t, false, true);
+  f.ready(); f.frame(0);
+  const { worldPosition } = load("panel/src/map/viewport.ts");
+  f.view.setProjection("perspective");
+  for (const time of [0, 200, 400, 600]) {
+    f.frame(time);
+    const matrix = f.view.surfaceMatrix(), progress = f.view.transitionProgress;
+    assert(matrix?.length === 16); assert(progress >= 0 && progress <= 1);
+    const camera = { ...f.view.camera }, bearing = f.view.bearing, plane = f.view.controls.target.y;
+    for (const [x, y] of [[550, 350], [800, 200], [300, 600]]) {
+      const world = worldPosition(camera, 1100, 700, x, y, bearing);
+      const direct = f.view.project({ x: world.x, y: plane, z: world.z });
+      const point = new three.Vector4(x, y, 0, 1).applyMatrix4(new three.Matrix4().fromArray(matrix));
+      assert(direct && Math.abs(point.x / point.w - direct.x) < 1e-6 && Math.abs(point.y / point.w - direct.y) < 1e-6);
+    }
+  }
+});
+
 test("the orthographic scene has exact 2D scale at every elevation and remains aligned after rebasing or resizing", async t => {
   const f = sceneFixture(t, false, true);
   const { MAP_MIN_Y, MAP_MAX_Y } = load("shared/map.ts");

@@ -140,6 +140,33 @@ export class SceneViewport implements MapRenderer {
     return normalizeBearing(-Math.atan2(offset.x, offset.z));
   }
   get frameView() { return { camera: { ...this.camera }, width: this.width, height: this.height, bearing: this.bearing, orthographic: this.topDown && !this.transition }; }
+  /** Linear 0-based blend while the projection changes; 0 is top-down, 1 is perspective. */
+  get transitionProgress() { return this.transition ? this.blend : undefined; }
+
+  /** CSS matrix mapping the flat 2D layer's pixels to the current transition camera. */
+  surfaceMatrix() {
+    if (!this.transition || !this.playerProjection || this.abort.signal.aborted || this.width <= 0 || this.height <= 0) return;
+    const c = Math.cos(this.topBearing), s = Math.sin(this.topBearing), invZoom = 1 / this.topZoom;
+    const halfWidth = this.width / 2 * invZoom, halfHeight = this.height / 2 * invZoom;
+    const world = new Matrix4().set(
+      c * invZoom, -s * invZoom, 0, this.camera.x - this.origin.x - c * halfWidth + s * halfHeight,
+      0, 0, 0, this.controls.target.y,
+      s * invZoom, c * invZoom, 0, this.camera.z - this.origin.z - s * halfWidth - c * halfHeight,
+      0, 0, 0, 1
+    );
+    const screen = new Matrix4().set(
+      this.width / 2, 0, 0, this.width / 2,
+      0, -this.height / 2, 0, this.height / 2,
+      0, 0, 1, 0,
+      0, 0, 0, 1
+    );
+    const matrix = new Matrix4().multiplyMatrices(screen, new Matrix4().multiplyMatrices(this.playerProjection, world));
+    const e = matrix.elements;
+    // CSS treats matrix3d as a full 3D transform. Keep only the 3×3 plane
+    // homography (x/y/w rows) and zero the depth row, otherwise Chrome clips
+    // the whole layer at its bogus perspective plane and nothing is painted.
+    return [e[0], e[1], 0, e[3], e[4], e[5], 0, e[7], 0, 0, 1, 0, e[12], e[13], 0, e[15]];
+  }
 
   setProjection(projection: "perspective" | "orthographic") {
     if (this.abort.signal.aborted || projection === this.projection) return;

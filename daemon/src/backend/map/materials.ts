@@ -57,7 +57,8 @@ export function blockMaterial(block: string, biome = "minecraft:plains", propert
   const colors = minecraftAssets.biomes[biome] ?? minecraftAssets.biomes["minecraft:plains"];
   const biomeTint = name === "leaf_litter" ? 3 : foliageTint.has(name) ? 1 : grassTint.has(name) ? 0 : undefined;
   const color = blockTintColor(name, colors);
-  return { name, color, model, biomeTint, kind: model.shape || plants.test(name) ? SceneKind.Plant : model.kind,
+  const kind = model.fire || plants.test(name) || model.shape === "ground" || model.shape === "cross" ? SceneKind.Plant : model.kind;
+  return { name, color, model, biomeTint, kind,
     ...(model.fire ? { fire: fireConnections(properties) } : {}),
     emissive: /^(?:fire|soul_fire|lava|glowstone|sea_lantern|shroomlight|jack_o_lantern|torch|soul_torch|lantern|soul_lantern|end_rod|ochre_froglight|verdant_froglight|pearlescent_froglight)$/.test(name) };
 }

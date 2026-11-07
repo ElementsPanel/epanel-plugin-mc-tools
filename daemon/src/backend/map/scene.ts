@@ -137,15 +137,17 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
   const total = materials.length;
   const solidOf = new Uint16Array(total), opaqueOf = new Uint8Array(total), occludesAoOf = new Uint8Array(total);
   const translucentOf = new Uint8Array(total), emissiveOf = new Uint8Array(total), nameOf = new Uint16Array(total);
+  const modelOf = new Uint8Array(total);
   const costOf = new Uint32Array(total);
   const nameSlots = new Map<string, number>();
   for (let id = 1; id < total; id++) {
     const material = materials[id];
-    solidOf[id] = material.kind === PLANT ? 0 : id;
+    solidOf[id] = material.kind === PLANT || material.model.solid === false ? 0 : id;
     opaqueOf[id] = material.kind === OPAQUE ? 1 : 0;
-    occludesAoOf[id] = material.kind === OPAQUE || material.kind === CUTOUT ? 1 : 0;
+    occludesAoOf[id] = material.model.solid === false ? 0 : material.kind === OPAQUE || material.kind === CUTOUT ? 1 : 0;
     translucentOf[id] = material.kind === TRANSLUCENT ? 1 : 0;
     emissiveOf[id] = material.emissive ? 1 : 0;
+    modelOf[id] = material.model.shape === "model" ? 1 : 0;
     let slot = nameSlots.get(material.name);
     if (slot === undefined) { slot = nameSlots.size; nameSlots.set(material.name, slot); }
     nameOf[id] = slot;
@@ -176,7 +178,7 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
     renderedCount += cost;
     const side = face < 6 ? face : 4, overlay = !!(source.model.overlay & (1 << side));
     const color = (source.model.tint & (1 << side)) || overlay ? source.color : 0xffffff;
-    const texture = source.model.faces[side];
+    const texture = source.model.shape === "model" ? source.model.key ?? source.model.faces[2] : source.model.faces[side];
     const offset = count++ * 16;
     tints.set(tintFace(x, y + minY, z, width, tall, face, source), (count - 1) * 12);
     bytes[offset] = x; bytes[offset + 1] = z; bytes.writeInt16LE(y + minY, offset + 2);
@@ -208,7 +210,10 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
           const b = fluidPass ? fluidCell(position[0], position[1], position[2]) : solidB;
           const owned = sign ? plane < dimensions[axis] : plane > 0;
           const solidCurrent = sign ? solidB : solidA;
-          const current = owned && !(fluidPass && solidCurrent && opaqueOf[solidCurrent] === 1) ? sign ? b : a : 0;
+          let current = owned && !(fluidPass && solidCurrent && opaqueOf[solidCurrent] === 1) ? sign ? b : a : 0;
+          // Model blocks still occlude neighbours, but their own cube faces are
+          // replaced by the single carrier quad expanded on the client.
+          if (modelOf[current]) current = 0;
           const neighbor = (sign ? a : b) || (fluidPass ? sign ? solidA : solidB : 0);
           let ao = 0;
           if (current && !occludes(neighbor, current) && !translucentOf[current] && !emissiveOf[current]) {
@@ -256,8 +261,11 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
   for (let y = 0; y < height && !limited; y++) {
     for (let z = 0; z < SIZE && !limited; z++) for (let x = 0; x < SIZE && !limited; x++) {
       const id = cell(x, y, z);
-      if (!id || materials[id].kind !== PLANT) continue;
-      if (materials[id].model.shape === "ground" || materials[id].model.shape === "model") quad(x, y, z, 1, 1, 2, id);
+      if (!id) continue;
+      const material = materials[id];
+      if (material.model.shape === "model") { quad(x, y, z, 1, 1, 2, id); continue; }
+      if (material.kind !== PLANT) continue;
+      if (material.model.shape === "ground") quad(x, y, z, 1, 1, 2, id);
       else { quad(x, y, z, 1, 1, 6, id); quad(x, y, z, 1, 1, 7, id); }
     }
     if (y % 16 === 0) {

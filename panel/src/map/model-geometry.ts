@@ -3,7 +3,7 @@ import { fireElements } from "../../../shared/fire";
 
 export const sceneModels = new Map<number, MinecraftBlock>();
 for (const block of [...Object.values(minecraftAssets.blocks), ...Object.values(minecraftAssets.states).flatMap(state => state.models)]) {
-  if (block.elements || block.fire) sceneModels.set(block.faces[2], block);
+  if (block.elements || block.fire) sceneModels.set(block.key ?? block.faces[2], block);
 }
 const directions = ["east", "west", "up", "down", "south", "north"];
 const normals = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -17,8 +17,8 @@ interface ModelFace {
   axes?: number[][]; minY?: number; maxY?: number;
 }
 
-/** Fire planes retain element rotation/rescale and face UV rotation, not their enclosing box. */
-function fireFaces(element: ModelElement, turns: number): ModelFace[] {
+/** Rotated elements keep their tilted planes as arbitrary quads, not their enclosing box. */
+function orientedFaces(element: ModelElement, turns: number): ModelFace[] {
   const transform = (point: number[]) => {
     const rotation = element.rotation;
     if (rotation) {
@@ -56,11 +56,9 @@ function fireFaces(element: ModelElement, turns: number): ModelFace[] {
   });
 }
 
-/** Preserve the original model's fractional bounds and UVs through blockstate yaw. */
-export function modelFaces(sprite: number, turns: number, connections = 0, seed = 0): ModelFace[] {
-  const model = sceneModels.get(sprite)!;
-  if (model.fire) return fireElements(model, connections, seed).flatMap(element => fireFaces(element, turns));
-  return model.elements!.flatMap(element => Object.entries(element.faces).map(([direction, texture]) => {
+/** Axis-aligned boxes rotate only by blockstate yaw and stay cheap lattice quads. */
+function axisFaces(element: ModelElement, turns: number): ModelFace[] {
+  return Object.entries(element.faces).map(([direction, texture]) => {
     const originalFace = directions.indexOf(direction), axis = originalFace >> 1;
     const from = element.from.map(v => v / 16), to = element.to.map(v => v / 16);
     const corners: number[][] = [];
@@ -83,5 +81,12 @@ export function modelFaces(sprite: number, turns: number, connections = 0, seed 
     const start = uv([0, 0]), alongU = uv([1, 0]), alongV = uv([0, 1]);
     return { origin, size, face, texture: texture.texture,
       uvU: [start[0], alongU[0] - start[0], alongV[0] - start[0]], uvV: [start[1], alongU[1] - start[1], alongV[1] - start[1]] };
-  }));
+  });
+}
+
+/** Preserve the original model's fractional bounds and UVs through blockstate yaw. */
+export function modelFaces(sprite: number, turns: number, connections = 0, seed = 0): ModelFace[] {
+  const model = sceneModels.get(sprite)!;
+  if (model.fire) return fireElements(model, connections, seed).flatMap(element => orientedFaces(element, turns));
+  return model.elements!.flatMap(element => element.rotation ? orientedFaces(element, turns) : axisFaces(element, turns));
 }

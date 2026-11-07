@@ -56,10 +56,16 @@ function overview(t, options = {}) {
     }
     center(x, z) { Object.assign(this.camera, { x, z }); }
     zoom(factor) { this.camera.zoom *= factor; }
-    setProjection(projection) { this.projection = projection; }
+    setProjection(projection) {
+      if (options.transition && projection !== this.projection) this.transition = options.transition;
+      this.projection = projection;
+    }
+    get isTransitioning() { return !!this.transition; }
+    get transitionProgress() { return this.transition?.progress; }
+    surfaceMatrix() { return this.transition?.matrix; }
     setActive(active) { this.active = active; }
     render(state = {}) {
-      this.frameView = { ...this.nextView, bearing: this.bearing ?? 0, orthographic: this.projection === "orthographic" };
+      this.frameView = { ...this.nextView, bearing: this.bearing ?? 0, orthographic: this.projection === "orthographic" && !this.transition };
       this.changed({ ...this.frameView.camera, bearing: this.bearing ?? 0, loading: 0, warnings: 0, ...state });
     }
     dispose() { this.disposed = true; }
@@ -336,9 +342,29 @@ test("2D and 3D reuse the same scene, canvas and input target while changing onl
 test("mode changes during lazy loading use the latest projection without creating a second scene", async t => {
   const f = overview(t); f.zoom(4); f.view.setMode("3d"); f.frame();
   const detail = await f.ready();
-  assert.equal(detail.projection, "perspective"); assert.equal(f.imports.length, 1);
+  assert.equal(detail.projection, "orthographic", "the first 3D switch starts top-down and animates in");
+  assert.equal(f.imports.length, 1);
+  detail.ready = true; detail.render(); f.frame();
+  assert.equal(detail.projection, "perspective");
   f.view.setMode("2d"); f.frame();
   assert.equal(detail.projection, "orthographic"); assert.equal(f.renderers.length, 1);
+});
+
+test("the flat 2D layer rides above the scene and fades through a projection change", async t => {
+  const transition = { progress: 0.25, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] };
+  const f = overview(t, { transition }); f.frame();
+  for (const request of f.requests.splice(0)) request.resolve({ image: "color-tile", warnings: 0 });
+  await tick(); f.frame();
+  f.view.setMode("3d"); f.frame();
+  const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
+  const flat = f.layers.find(layer => layer.style.transform?.startsWith("matrix3d"));
+  assert(flat, "the color layer joins the transition");
+  assert(f.layers.indexOf(flat) > f.layers.indexOf(detail.canvas), "it paints above the scene");
+  assert.equal(flat.style.opacity, "0.75"); assert.equal(flat.style.visibility, "visible");
+  assert.equal(flat.style.width, "100%"); assert.equal(flat.style.pointerEvents, "none");
+  assert(f.draws.some(draw => draw.image?.url === "data:image/png;base64,color-tile" && draw.target === flat));
+  detail.transition = undefined; detail.render(); f.frame();
+  assert(!f.layers.includes(flat));
 });
 
 test("retained orthographic frames stay aligned during pan and zoom", async t => {

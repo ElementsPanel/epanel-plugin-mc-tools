@@ -22,6 +22,26 @@ const ZOOM_DURATION = 200;
 const easeOut = (progress: number) => 1 - Math.pow(1 - progress, 3);
 const tileKey = (position: string) => `surface:${position}`;
 
+/** Clip the flat layer where the projected plane falls behind the transition camera. */
+function surfaceClip(matrix: number[] | undefined, width: number, height: number) {
+  if (!matrix) return "";
+  const a = matrix[3], b = matrix[7], c = matrix[15];
+  const corners = [[0, 0], [width, 0], [width, height], [0, height]];
+  if (corners.every(([x, y]) => a * x + b * y + c >= 0)) return "";
+  const clipped: number[][] = [];
+  for (let i = 0; i < corners.length; i++) {
+    const from = corners[i], to = corners[(i + 1) % corners.length];
+    const atFrom = a * from[0] + b * from[1] + c, atTo = a * to[0] + b * to[1] + c;
+    if (atFrom >= 0) clipped.push(from);
+    if (atFrom >= 0 !== atTo >= 0) {
+      const ratio = atFrom / (atFrom - atTo);
+      clipped.push([from[0] + (to[0] - from[0]) * ratio, from[1] + (to[1] - from[1]) * ratio]);
+    }
+  }
+  return clipped.length < 3 ? "polygon(0px 0px, 0px 0px, 0px 0px)"
+    : `polygon(${clipped.map(([x, y]) => `${x}px ${y}px`).join(", ")})`;
+}
+
 export function worldPosition(camera: Camera, width: number, height: number, x: number, y: number, bearing = 0) {
   const offset = screenToWorld((x - width / 2) / camera.zoom, (y - height / 2) / camera.zoom, bearing);
   return { x: camera.x + offset.x, z: camera.z + offset.z };
@@ -69,6 +89,9 @@ export class MapViewport {
   private detail?: import("./scene-viewport").SceneViewport;
   private detailCanvas?: HTMLCanvasElement;
   private backdropCanvas?: HTMLCanvasElement;
+  private flatCanvas?: HTMLCanvasElement;
+  private flatHandoff = false;
+  private pendingProjection?: "perspective" | "orthographic";
   private detailFrame?: { camera: Camera; width: number; height: number; bearing?: number; orthographic: boolean };
   private detailOpacity = 0;
   private detailFade?: { from: number; to: number; startedAt: number };
@@ -159,6 +182,8 @@ export class MapViewport {
     this.clearPointers();
     this.mode = mode;
     if (this.detail) {
+      this.pendingProjection = undefined;
+      if (mode === "3d") this.flatHandoff = false;
       if (mode === "3d") this.detail.setTopDownView(this.camera, this.width, this.height, this.bearing);
       this.detail.setProjection(mode === "3d" ? "perspective" : "orthographic");
       if (previous === "3d") { Object.assign(this.camera, this.detail.camera); this.bearing = this.detail.bearing ?? this.bearing; }
@@ -199,6 +224,10 @@ export class MapViewport {
     if (this.backdropCanvas) {
       this.backdropCanvas.width = this.canvas.width;
       this.backdropCanvas.height = this.canvas.height;
+    }
+    if (this.flatCanvas) {
+      this.flatCanvas.width = this.canvas.width;
+      this.flatCanvas.height = this.canvas.height;
     }
     this.schedule();
   }
@@ -319,7 +348,11 @@ export class MapViewport {
     if (!foreground) return;
     this.updateDetail();
     this.presentScene(time);
-    const context = this.backdropCanvas?.getContext("2d") ?? foreground;
+    // Keep painting the flat map on top of the moving 3D scene while both
+    // projections blend, so it fades with the perspective instead of vanishing.
+    const flat = this.detail?.isTransitioning && this.sceneVisible && this.camera.zoom < MAP_DETAIL_ZOOM ? this.ensureFlat() : undefined;
+    if (flat && this.mode === "2d") this.flatHandoff = true;
+    const context = (flat ?? this.backdropCanvas)?.getContext("2d") ?? foreground;
     const ratio = this.canvas.width / this.width, ratioY = this.canvas.height / this.height;
     for (const layer of new Set([foreground, context])) {
       layer.setTransform(ratio, 0, 0, ratioY, 0, 0);
@@ -327,7 +360,8 @@ export class MapViewport {
       layer.imageSmoothingEnabled = false;
     }
     if (context !== foreground) foreground.clearRect(0, 0, this.width, this.height);
-    if (this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible) {
+    if (this.detailFrame && !this.detailFrame.orthographic && this.sceneVisible && !flat) {
+      this.hideFlat();
       this.changed({ ...this.detailState!, x: Math.round(this.camera.x), z: Math.round(this.camera.z), zoom: this.camera.zoom, bearing: this.bearing });
       if (animating) this.schedule();
       return;
@@ -389,6 +423,15 @@ export class MapViewport {
     }
     context.setTransform(ratio, 0, 0, ratioY, 0, 0);
     this.drawMarkers(foreground);
+    if (flat) {
+      const matrix = this.detail?.surfaceMatrix();
+      if (matrix) {
+        flat.style.transform = `matrix3d(${matrix.join(",")})`;
+        flat.style.clipPath = surfaceClip(matrix, this.width, this.height);
+        flat.style.opacity = String(Math.max(0, Math.min(1, 1 - (this.detail?.transitionProgress ?? 1))));
+        flat.style.visibility = "visible";
+      } else this.hideFlat();
+    } else this.hideFlat();
     const needed = visible.filter((item) => {
       const key = tileKey(item.key);
       return !this.cache.has(key) && !this.pending.has(key) && !this.failed.has(key);
@@ -467,6 +510,13 @@ export class MapViewport {
     if (this.reducedMotion?.matches || !frame.orthographic || this.mode === "3d") {
       this.detailOpacity = target;
       this.detailFade = undefined;
+    } else if (this.flatHandoff) {
+      // The flat 2D layer replaced the orthographic scene during the transition.
+      if (this.camera.zoom < MAP_DETAIL_ZOOM) {
+        this.detailOpacity = target;
+        this.detailFade = undefined;
+      }
+      this.flatHandoff = false;
     } else if (target !== (this.detailFade?.to ?? this.detailOpacity)) {
       this.detailFade = { from: this.detailOpacity, to: target, startedAt: time };
     }
@@ -528,11 +578,19 @@ export class MapViewport {
           this.detailState = state;
           if (this.mode === "3d" && this.detail) Object.assign(this.camera, this.detail.camera);
           if (this.mode === "3d" || this.detail?.isTransitioning) this.bearing = state.bearing ?? this.bearing;
-          if (this.detail?.ready) this.detailFrame = this.detail.frameView;
+          if (this.detail?.ready) {
+            // A scene created for 3D starts top-down so the first switch also animates.
+            if (this.pendingProjection) {
+              this.detail.setProjection(this.pendingProjection);
+              this.pendingProjection = undefined;
+            }
+            this.detailFrame = this.detail.frameView;
+          }
           this.presentScene();
         }
         this.schedule();
-      }, this.mode === "3d" ? "perspective" : "orthographic", this.canvas);
+      }, "orthographic", this.canvas);
+      if (this.mode === "3d") this.pendingProjection = "perspective";
       this.detail.setSize(this.width, this.height);
       this.detail.camera.zoom = this.camera.zoom;
       this.detail.center(this.camera.x, this.camera.z);
@@ -545,10 +603,32 @@ export class MapViewport {
     });
   }
 
+  /** Recreated only while a transition runs, so normal mode keeps just the detail layer. */
+  private ensureFlat() {
+    if (this.flatCanvas) return this.flatCanvas;
+    const canvas = this.canvas.ownerDocument.createElement("canvas");
+    canvas.width = this.canvas.width; canvas.height = this.canvas.height;
+    canvas.setAttribute("aria-hidden", "true");
+    Object.assign(canvas.style, { position: "absolute", inset: "0", width: "100%", height: "100%", pointerEvents: "none", transformOrigin: "0 0", visibility: "hidden" });
+    this.canvas.before(canvas);
+    this.flatCanvas = canvas;
+    return canvas;
+  }
+
+  private hideFlat() {
+    if (!this.flatCanvas) return;
+    this.flatCanvas.remove();
+    this.flatCanvas.width = this.flatCanvas.height = 0;
+    this.flatCanvas = undefined;
+  }
+
   private stopDetail() {
     if (!this.detailLoading && !this.detail && !this.detailCanvas) return;
     this.detailGeneration++; this.detailLoading = false;
     this.detail?.dispose(); this.detail = undefined;
+    this.flatHandoff = false;
+    this.pendingProjection = undefined;
+    this.hideFlat();
     for (const canvas of [this.detailCanvas, this.backdropCanvas]) if (canvas) {
       canvas.remove(); canvas.width = canvas.height = 0;
     }

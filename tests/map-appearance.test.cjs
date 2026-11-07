@@ -4,7 +4,31 @@ const { loader } = require("./helpers.cjs");
 const load = loader();
 const { meshScene } = load("daemon/src/backend/map/scene.ts");
 const { decodeScene } = load("panel/src/map/scene-codec.ts");
-const { SCENE_MODEL } = load("shared/scene.ts");
+const { SceneKind, SCENE_MODEL, sceneTextures } = load("shared/scene.ts");
+
+test("torches and composters expand their real thin model geometry instead of textured cubes", async () => {
+  const tile = async (name, properties = {}) => ({ ...await meshScene([{ x: 0, z: 0, layers: [{ y: 0,
+    block: i => i === 0 ? name : "air", properties: () => properties }] }]), chunks: 1, warnings: 0 });
+  const sprites = mesh => new Set([...mesh.sprites].map(sprite => sceneTextures.get(sprite)[0]));
+  for (const [name, properties, texture] of [["torch", {}, "block/torch"], ["soul_torch", {}, "block/soul_torch"],
+    ["redstone_torch", { lit: "true" }, "block/redstone_torch"]]) {
+    const result = await tile(name, properties), bytes = Buffer.from(result.quads, "base64");
+    assert.equal(bytes.length, 16, name); assert(bytes[9] & SCENE_MODEL);
+    const mesh = decodeScene(result).meshes[0];
+    assert.equal(mesh.count, 6, name); assert.equal(mesh.kind, SceneKind.Cutout, name);
+    assert.deepEqual(sprites(mesh), new Set([texture]), name);
+    assert(mesh.minY === 0 && mesh.maxY === 1, name);
+  }
+  for (const facing of ["north", "east", "south", "west"]) {
+    const mesh = decodeScene(await tile("wall_torch", { facing })).meshes[0];
+    assert.equal(mesh.count, 6); assert(mesh.axes, "the wall model tilts away from its cube");
+    assert(mesh.maxY > 1, "the torch extends above the supporting block");
+  }
+  const composter = decodeScene(await tile("composter")).meshes[0];
+  assert.equal(composter.count, 18); assert.equal(composter.kind, SceneKind.Opaque);
+  assert.deepEqual(sprites(composter), new Set(["block/composter_side", "block/composter_top", "block/composter_bottom"]));
+  assert(composter.minY === 0 && composter.maxY === 1);
+});
 
 test("adjacent faces carry identical corner colors along their shared edge, including legacy cached colors", async () => {
   const layer = { y: 0, block: i => i >> 8 === 0 ? "grass_block" : "air",

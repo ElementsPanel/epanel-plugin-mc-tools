@@ -63,9 +63,10 @@ export function decodeScene(tile: MapSceneTile, parts?: SceneParts) {
     const x = raw[offset], z = raw[offset + 1], y = data.getInt16(offset + 2, true);
     const w = data.getUint16(offset + 4, true), h = data.getUint16(offset + 6, true);
     const face = raw[offset + 8], flags = raw[offset + 9], kind = flags & 3, texture = data.getUint16(offset + 10, true), axis = Math.floor(face / 2);
-    if (face > 7 || flags > 31 && !(flags & SCENE_MODEL) || !sceneTextures.has(texture) || x > MAP_SCENE_SIZE || z > MAP_SCENE_SIZE || y < MAP_MIN_Y || y > MAP_MAX_Y + 1 || !w || !h) throw new Error("MC_MAP_CORRUPT");
-    if ((flags & SCENE_MODEL) && (kind !== SceneKind.Plant || face !== 2 || w !== 1 || h !== 1 || !sceneModels.has(texture) || x >= MAP_SCENE_SIZE || z >= MAP_SCENE_SIZE || y > MAP_MAX_Y)) throw new Error("MC_MAP_CORRUPT");
-    if ((flags & SCENE_MODEL) && sceneModels.get(texture)?.fire && raw[offset + 15] > 31) throw new Error("MC_MAP_CORRUPT");
+    const model = flags & SCENE_MODEL ? sceneModels.get(texture) : undefined;
+    if (face > 7 || (flags > 31 && !model) || (!model && !sceneTextures.has(texture)) || x > MAP_SCENE_SIZE || z > MAP_SCENE_SIZE || y < MAP_MIN_Y || y > MAP_MAX_Y + 1 || !w || !h) throw new Error("MC_MAP_CORRUPT");
+    if (model && (face !== 2 || w !== 1 || h !== 1 || x >= MAP_SCENE_SIZE || z >= MAP_SCENE_SIZE || y > MAP_MAX_Y)) throw new Error("MC_MAP_CORRUPT");
+    if (model?.fire && raw[offset + 15] > 31) throw new Error("MC_MAP_CORRUPT");
     if ((flags & SCENE_GROUND) && (face !== 2 || kind !== SceneKind.Plant || w !== 1 || h !== 1 || y > MAP_MAX_Y)) throw new Error("MC_MAP_CORRUPT");
     const valid = face >= 6 ? kind === SceneKind.Plant && w === 1 && h === 1 && x < MAP_SCENE_SIZE && z < MAP_SCENE_SIZE && y <= MAP_MAX_Y
       : axis === 0 ? y + w <= MAP_MAX_Y + 1 && z + h <= MAP_SCENE_SIZE
@@ -93,7 +94,7 @@ export function decodeScene(tile: MapSceneTile, parts?: SceneParts) {
       raw[offset + 15] = 0;
       groups[SceneKind.Plant].push(offset);
     } else groups[kind].push(offset);
-    animated ||= sceneTextures.get(texture)![2] > 1;
+    animated ||= (sceneTextures.get(model ? model.faces[2] : texture)?.[2] ?? 0) > 1;
   }
   let expanded = 0;
   const meshes = groups.flatMap((offsets, kind) => {
