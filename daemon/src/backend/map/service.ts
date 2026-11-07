@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import { MAP_TILE_SIZE, mapCoordinate, mapSceneCoordinate, type MapTile, type MapSceneTile } from "../../../../shared/map";
 import { discoverWorlds, type SavedWorld } from "./worlds";
-import { chunkLayers, chunkSurface } from "./chunk";
+import { chunkLayers } from "./chunk";
 import { encodePng } from "./png";
 import { BedrockSnapshots } from "./snapshot";
-import { bedrockLayers, bedrockSurface } from "./bedrock";
+import { bedrockLayers } from "./bedrock";
 import { javaRegions, readJavaChunks } from "./java";
 import { meshScene, type SceneChunk } from "./scene";
+import { renderSurface, type SurfaceChunk } from "./surface";
 
 
 export class WorldMapService {
@@ -175,24 +176,26 @@ export class WorldMapService {
   private async render(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapTile> {
     if (world.edition === "bedrock") return this.renderBedrock(world, key, tileX, tileZ);
     const firstX = tileX * 8, firstZ = tileZ * 8;
-    const { files, stamp } = await javaRegions(world, firstX, firstZ, 8);
+    // The ring of neighbouring chunks feeds edge occlusion and biome blending, so
+    // tiles meet without seams; it is part of the cache stamp for the same reason.
+    const { files, stamp } = await javaRegions(world, firstX - 1, firstZ - 1, 10);
     const cached = this.cache.get(key);
     if (cached?.stamp === stamp) {
       this.cache.delete(key);
       this.cache.set(key, cached);
       return cached.tile;
     }
-    const colors = new Uint32Array(MAP_TILE_SIZE ** 2);
-    const heights = new Int16Array(colors.length).fill(-32768);
-    const { chunks, warnings } = await readJavaChunks(world, files, (nbt, chunkX, chunkZ) => {
-      const surface = chunkSurface(nbt, world.dimension === "minecraft:the_nether");
-      for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
-        const target = ((chunkZ - firstZ) * 16 + z) * MAP_TILE_SIZE + (chunkX - firstX) * 16 + x;
-        colors[target] = surface.colors[z * 16 + x];
-        heights[target] = surface.heights[z * 16 + x];
-      }
-    }, () => this.disposed);
-    return this.finish(key, stamp, colors, heights, chunks, warnings);
+    const owned = (x: number, z: number) => x >= firstX && x < firstX + 8 && z >= firstZ && z < firstZ + 8;
+    const split = (inside: boolean) => files.map(file => ({ ...file, chunks: file.chunks.filter(chunk => owned(chunk.x, chunk.z) === inside) }))
+      .filter(file => file.chunks.length);
+    const nether = world.dimension === "minecraft:the_nether";
+    const areas: SurfaceChunk[] = [];
+    const collect = (nbt: any, x: number, z: number) => { areas.push({ x: x - firstX, z: z - firstZ, layers: chunkLayers(nbt, true) }); };
+    const { chunks, warnings } = await readJavaChunks(world, split(true), collect, () => this.disposed);
+    // Missing or damaged neighbours only soften the edge; they are not this tile's warnings.
+    if (chunks) await readJavaChunks(world, split(false), collect, () => this.disposed);
+    if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
+    return this.surface(key, stamp, areas, nether, chunks, warnings);
   }
 
   private async renderBedrock(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapTile> {
@@ -203,41 +206,37 @@ export class WorldMapService {
         this.cache.set(key, cached);
         return cached.tile;
       }
-      const colors = new Uint32Array(MAP_TILE_SIZE ** 2);
-      const heights = new Int16Array(colors.length).fill(-32768);
-      let chunks = 0, warnings = 0;
-      for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) {
+      const areas: SurfaceChunk[] = [];
+      let chunks = 0, warnings = 0, read = 0;
+      // Owned chunks first: an empty tile does not need its neighbours.
+      for (const ring of [false, true]) for (let z = -1; z <= 8; z++) for (let x = -1; x <= 8; x++) {
         if (this.disposed) throw new Error("MC_MAP_UNAVAILABLE");
-        let surface;
-        try { surface = await bedrockSurface(db, tileX * 8 + x, tileZ * 8 + z, world.dimensionId!); }
+        const owned = x >= 0 && x < 8 && z >= 0 && z < 8;
+        if (owned === ring || (ring && !chunks)) continue;
+        let chunk;
+        try { chunk = await bedrockLayers(db, tileX * 8 + x, tileZ * 8 + z, world.dimensionId!); }
         catch (error) {
           if (!(error instanceof Error) || error.message !== "MC_MAP_CORRUPT") throw error;
-          warnings++;
+          if (owned) warnings++;
           continue;
         }
-        if (!surface) continue;
-        warnings += surface.warnings;
-        chunks++;
-        for (let localZ = 0; localZ < 16; localZ++) for (let localX = 0; localX < 16; localX++) {
-          const target = (z * 16 + localZ) * MAP_TILE_SIZE + x * 16 + localX;
-          colors[target] = surface.colors[localZ * 16 + localX];
-          heights[target] = surface.heights[localZ * 16 + localX];
-        }
-        if (chunks % 8 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+        if (!chunk) continue;
+        if (owned) { warnings += chunk.warnings; chunks++; }
+        areas.push({ x, z, layers: chunk.layers });
+        if (++read % 8 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       }
-      return this.finish(key, stamp, colors, heights, chunks, warnings);
+      return this.surface(key, stamp, areas, world.dimensionId === 1, chunks, warnings);
     });
   }
 
-  private finish(key: string, stamp: string, colors: Uint32Array, heights: Int16Array, chunks: number, warnings: number): MapTile {
-    const pixels = new Uint8Array(colors.length * 4);
-    for (let i = 0; i < colors.length; i++) {
-      if (heights[i] === -32768) continue;
-      pixels[i * 4] = (colors[i] >> 16) & 255;
-      pixels[i * 4 + 1] = (colors[i] >> 8) & 255;
-      pixels[i * 4 + 2] = colors[i] & 255;
-      pixels[i * 4 + 3] = 255;
-    }
+  /** Damaged owned chunks found while drawing count like ones that failed to parse. */
+  private surface(key: string, stamp: string, areas: SurfaceChunk[], nether: boolean, chunks: number, warnings: number) {
+    const { pixels, corrupt } = renderSurface(areas, MAP_TILE_SIZE, nether);
+    const owned = corrupt.filter(chunk => chunk.x >= 0 && chunk.z >= 0 && chunk.x < 8 && chunk.z < 8).length;
+    return this.finish(key, stamp, pixels, chunks - owned, warnings + owned);
+  }
+
+  private finish(key: string, stamp: string, pixels: Uint8Array, chunks: number, warnings: number): MapTile {
     const tile = { image: encodePng(pixels, MAP_TILE_SIZE, MAP_TILE_SIZE).toString("base64"), chunks, warnings };
     if (!this.disposed && !warnings) {
       this.evictTile(key);

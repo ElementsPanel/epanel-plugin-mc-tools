@@ -1,5 +1,5 @@
-import { minecraftAssets } from "../../../../shared/scene";
-import topColors from "../../../../shared/top-colors.json";
+import { minecraftAssets, SceneKind } from "../../../../shared/scene";
+import spriteColors from "../../../../shared/sprite-colors.json";
 import { blockTintColor } from "./materials";
 
 const named: Record<string, number> = {
@@ -69,7 +69,10 @@ function tint(color: number, tintColor: number): number {
   const b = Math.round((color & 255) * (tintColor & 255) / 255);
   return (r << 16) | (g << 8) | b;
 }
-/** Flat map color: the average top-face sprite, tinted like the in-game renderer. */
+/**
+ * Flat color of one unshaded, unblended top face: the sprite as the terrain shader
+ * samples it near the 2D/3D hand-off zoom, tinted like the in-game renderer.
+ */
 export function blockColor(block: string, biome?: string): number {
   const key = biome === undefined ? block : block + "|" + biome;
   const cached = colorCache.get(key);
@@ -80,13 +83,28 @@ export function blockColor(block: string, biome?: string): number {
   return value;
 }
 
+type Sprite = [color: number, alpha: number, mipColor: number, cover: number];
+/** Average sprite color as a translucent face blends it, or as a cutout face draws it. */
+export function spriteColor(sprite: number, translucent: boolean): number | undefined {
+  const value = (spriteColors as unknown as Record<string, Sprite>)[String(sprite)];
+  return value && (translucent ? value[0] : value[2]);
+}
+
 function colorOf(block: string, biome?: string): number {
-  const name = block.replace(/^.*:/, "");
-  const top = topColors[name === "grass" ? "grass_block" : name];
+  const name = block.replace(/^.*:/, ""), bare = name === "grass" ? "grass_block" : name;
+  const model = minecraftAssets.blocks[bare];
+  const top = model && spriteColor(model.shape === "model" ? model.key ?? model.faces[2] : model.faces[2], model.kind === SceneKind.Translucent);
   if (top !== undefined) {
+    if (!(model.tint & 4)) return top;
     const colors = minecraftAssets.biomes[biome ?? "minecraft:plains"] ?? minecraftAssets.biomes["minecraft:plains"];
-    return tint(top, blockTintColor(name === "grass" ? "grass_block" : name, colors));
+    return tint(top, blockTintColor(bare, colors));
   }
+  return fallbackColor(name);
+}
+
+/** Approximate colors for blocks missing from the bundled Minecraft assets (mods). */
+export function fallbackColor(block: string): number {
+  const name = block.replace(/^.*:/, "");
   if (named[name] !== undefined) return named[name];
   if (name.includes("cherry_leaves")) return 0xd99bb6;
   if (name.includes("pale_oak_leaves")) return 0x8f9783;

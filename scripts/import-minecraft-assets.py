@@ -20,6 +20,11 @@ from zipfile import ZipFile
 
 from PIL import Image
 
+import importlib.util
+_spec = importlib.util.spec_from_file_location("sprite_colors", Path(__file__).resolve().parent / "sprite-colors.py")
+sprite_colors = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sprite_colors)
+
 ROOT = Path(__file__).resolve().parent.parent
 DIRECTIONS = ["east", "west", "up", "down", "south", "north"]
 INNER, PADDING, CELL, COLUMNS = 16, 8, 32, 64
@@ -316,34 +321,13 @@ def main(jar, biome_jar=None, biomes_only=False, supplement=None):
 
         biomes = biome_palette(archive, biome_archive)
 
-        # The flat 2D map fills each column with its top face's average sprite color.
-        frame_names = {}
-        for name, first, count, _duration, _interpolate in textures:
-            for frame in range(first, first + count):
-                frame_names[frame] = name
-        def top_color(value):
-            frame = frames[value["faces"][2]]
-            if frame is None:
-                return None
-            pixels = [frame.getpixel((PADDING + x, PADDING + y)) for y in range(INNER) for x in range(INNER)]
-            alpha = sum(pixel[3] for pixel in pixels)
-            if not alpha:
-                return None
-            return tuple(round(sum(pixel[channel] * pixel[3] for pixel in pixels) / alpha) for channel in range(3))
-        top_colors = {}
-        for name, value in blocks.items():
-            if "[" in name or frame_names.get(value["faces"][2]) == "missing":
-                continue
-            color = top_color(value)
-            if color is not None:
-                top_colors[name] = (color[0] << 16) | (color[1] << 8) | color[2]
-
         output = ROOT / "panel/src/assets/minecraft"
         output.mkdir(parents=True, exist_ok=True)
         atlas.save(output / "atlas.png", optimize=True)
-        (ROOT / "shared/top-colors.json").write_text(json.dumps(top_colors, separators=(",", ":"), sort_keys=True) + "\n")
         metadata = {"version": read("version.json")["id"], "atlas": {"width": atlas.width, "height": atlas.height, "cell": CELL, "inner": INNER, "padding": PADDING, "columns": COLUMNS}, "textures": textures, "blocks": blocks, "states": states, "biomes": biomes, "biomeVersion": biome_version}
         (ROOT / "shared/minecraft-assets.json").write_text(json.dumps(metadata, separators=(",", ":")) + "\n")
+        # The flat 2D map reduces each sprite to what the 3D top-down view shows.
+        sprite_colors.main(output / "atlas.png", ROOT / "shared/minecraft-assets.json", ROOT / "shared/sprite-colors.json")
         base_blocks = sum("[" not in name for name in blocks)
         provenance = {"minecraftVersion": metadata["version"], "jarSha256": hashlib.sha256(jar.read_bytes()).hexdigest(), "atlasSha256": hashlib.sha256((output / "atlas.png").read_bytes()).hexdigest(), "textures": len(textures) - 1, "frames": len(frames), "blocks": base_blocks, "variants": len(blocks) - base_blocks, **biome_source}
         if supplement:

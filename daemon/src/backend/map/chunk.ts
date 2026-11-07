@@ -1,6 +1,6 @@
-import { blockColor, isAir, legacyBlockName } from "./colors";
-import { blockFluid } from "./materials";
+import { isAir, legacyBlockName } from "./colors";
 import { ChunkLongs } from "./nbt";
+import { renderSurface } from "./surface";
 
 function unsignedLong(value: any): bigint {
   if (typeof value === "bigint") return BigInt.asUintN(64, value);
@@ -67,6 +67,15 @@ export function blockProperties(value: unknown): Readonly<Record<string, string>
   if (entries.length) return Object.fromEntries(entries.map(([key, value]) => [key, String(value)]));
 }
 
+/**
+ * Packed longs view the whole inflated chunk; maps hold many chunks' layers at once,
+ * so copy just this section's few kilobytes and let the chunk buffer go.
+ */
+function detach<T>(data: T): T {
+  if (!(data instanceof ChunkLongs)) return data;
+  return new ChunkLongs(Buffer.from(data.buffer.subarray(data.start, data.start + data.count * 8)), 0, data.count) as T;
+}
+
 export function chunkLayers(nbt: any, retainBiomes = false): BlockLayer[] {
   const chunk = nbt.Level ?? nbt;
   const sections = chunk.sections ?? chunk.Sections;
@@ -79,7 +88,7 @@ export function chunkLayers(nbt: any, retainBiomes = false): BlockLayer[] {
     const biomes = section.biomes?.palette;
     if (Array.isArray(biomes) && biomes.length && biomes.length <= 64 && biomes.every(name => typeof name === "string")) {
       try {
-        const read = paletteReader(section.biomes.data, biomes.length, version, 64, 1);
+        const read = paletteReader(detach(section.biomes.data), biomes.length, version, 64, 1);
         biome = index => biomes[read(((index >> 10) & 3) * 16 + ((index >> 6) & 3) * 4 + ((index >> 2) & 3))];
       } catch { /* Incomplete biome data does not hide otherwise readable blocks. */ }
     }
@@ -92,7 +101,7 @@ export function chunkLayers(nbt: any, retainBiomes = false): BlockLayer[] {
         // Air sections still carry the biome colors needed by neighboring treetops.
         return retainBiomes && biome ? { y, biome, empty: true, block: () => "minecraft:air" } : undefined;
       }
-      const read = paletteReader(section.block_states?.data ?? section.BlockStates, names.length, version);
+      const read = paletteReader(detach(section.block_states?.data ?? section.BlockStates), names.length, version);
       return { y, biome, block: (index: number) => names[read(index)] ?? "minecraft:air", properties: (index: number) => properties[read(index)] };
     }
     if (section.Blocks?.length === 4096) {
@@ -108,32 +117,10 @@ export function chunkSurface(nbt: any, nether = false) {
   return surfaceFromLayers(chunkLayers(nbt), nether);
 }
 
+/** One chunk on its own, as the flat map draws it (no neighbours at its edges). */
 export function surfaceFromLayers(layers: BlockLayer[], nether = false) {
+  const { pixels, heights } = renderSurface([{ x: 0, z: 0, layers }], 16, nether);
   const colors = new Uint32Array(256);
-  const heights = new Int16Array(256).fill(-32768);
-  const record = (column: number, height: number, name: string, layer: BlockLayer, index: number) => {
-    const properties = layer.properties?.(index);
-    const fluid = layer.fluid?.(index) ?? blockFluid(name, properties);
-    if (fluid) name = fluid;
-    colors[column] = blockColor(name, layer.biome?.(index));
-    heights[column] = height;
-  };
-  for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
-    let open = !nether;
-    let lastY = 121;
-    search: for (const layer of layers) {
-      if (nether && layer.y * 16 > 120) continue;
-      if (nether && lastY - (layer.y * 16 + 15) > 1) open = true;
-      for (let y = Math.min(15, nether ? 120 - layer.y * 16 : 15); y >= 0; y--) {
-        const height = layer.y * 16 + y;
-        const name = layer.block(y * 256 + z * 16 + x);
-        lastY = height;
-        if (isAir(name)) { open = true; continue; }
-        if (!open) continue;
-        record(z * 16 + x, height, name, layer, y * 256 + z * 16 + x);
-        break search;
-      }
-    }
-  }
+  for (let i = 0; i < 256; i++) colors[i] = (pixels[i * 4] << 16) | (pixels[i * 4 + 1] << 8) | pixels[i * 4 + 2];
   return { colors, heights };
 }

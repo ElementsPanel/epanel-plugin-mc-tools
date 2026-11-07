@@ -93,7 +93,10 @@ test("underwater plants coexist with a continuous water volume instead of carvin
     assert(!water.some(face => face.face < 2 && face.x === 1), "no internal wall between water and the waterlogged plant");
     assert.equal(faces.filter(face => face.kind === SceneKind.Plant).length, 2);
     assert(water.some(face => face.face === 2 && face.y === 1 && face.h === 2));
-    assert.equal(surfaceFromLayers([wet]).colors[0], load("daemon/src/backend/map/colors.ts").blockColor("water"));
+    // Seen from above the plant's vertical quads vanish: the column is plain water.
+    const flat = surfaceFromLayers([wet]).colors;
+    assert.equal(flat[0], flat[1]);
+    assert.notEqual(flat[0], 0);
   }
 });
 

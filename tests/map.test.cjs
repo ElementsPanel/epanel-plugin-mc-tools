@@ -77,6 +77,23 @@ function pixels(tile) {
 }
 
 function rgb(color) { return [(color >> 16) & 255, (color >> 8) & 255, color & 255, 255]; }
+/** The 3D view shades Nether top faces to 90%, and the flat map follows it. */
+function netherShade(color) { return (Math.round(((color >> 16) & 255) * 0.9) << 16) | (Math.round(((color >> 8) & 255) * 0.9) << 8) | Math.round((color & 255) * 0.9); }
+/**
+ * A lone water body over nothing shows its top face and, through it, its half-shaded
+ * bottom face, exactly like the double-sided translucent pass of the 3D view.
+ */
+function waterOverVoid() {
+  const assets = require("../shared/minecraft-assets.json"), sprites = require("../shared/sprite-colors.json");
+  const alpha = sprites[assets.blocks.water.faces[2]][1] / 255, color = blockColor("water");
+  const coverage = 1 - (1 - alpha) ** 2, weight = alpha * (1 + 0.5 * (1 - alpha)) / coverage;
+  return [16, 8, 0].map(shift => Math.round(((color >> shift) & 255) * weight)).concat(Math.round(coverage * 255));
+}
+/** Blending happens before rounding in the renderer, so allow one step per channel. */
+function near(actual, expected) {
+  assert.equal(actual.length, expected.length);
+  for (let i = 0; i < actual.length; i++) assert(Math.abs(actual[i] - expected[i]) <= 1, `${actual} ≉ ${expected}`);
+}
 function instance(root, type = "minecraft/java") { return { config: { type }, absoluteCwdPath: () => root }; }
 
 function bedrockStorage(names, select = () => 0, bits = 1) {
@@ -128,7 +145,7 @@ test("Java maps discover dimensions, render saved chunks at positive/negative co
   assert.equal(await service.tile("server", overworld.id, 0, 0), first);
   await writeRegion(world, 0, 0, javaChunk("water"), 3);
   await service.worlds("server", true);
-  assert.deepEqual(pixels(await service.tile("server", overworld.id, 0, 0))(0, 0), rgb(blockColor("water")));
+  near(pixels(await service.tile("server", overworld.id, 0, 0))(0, 0), waterOverVoid());
   await assert.rejects(service.tile("server", "0".repeat(24), 0, 0), /MC_MAP_WORLD_MISSING/);
   await assert.rejects(service.tile("server", overworld.id, 1.5, 0), /MC_MAP_INVALID/);
   await assert.rejects(service.tile("server", overworld.id, 999999, 0), /MC_MAP_INVALID/);
@@ -192,7 +209,7 @@ test("Java 26.x dimensions, legacy dimension fallbacks, and modern spawn data wo
     assert.deepEqual(value.spawn, spawn);
     const tile = await service.tile("server", value.id, 0, 0);
     assert.equal(tile.warnings, 0);
-    assert.deepEqual(pixels(tile)(0, 0), rgb(blockColor(block)));
+    assert.deepEqual(pixels(tile)(0, 0), rgb(dimension === "minecraft:the_nether" ? netherShade(blockColor(block)) : blockColor(block)));
   }
   assert(worlds.some((value) => value.dimension === "example:islands/upper"));
   await fs.writeFile(path.join(world, "level.dat"), metadata("minecraft:the_nether", [12, 75, -3]));
@@ -297,7 +314,7 @@ test("Nether surface skips the bedrock ceiling and selects the terrain below an 
   for (let y = 5; y <= 10; y++) blocks.fill(0, y * 256, (y + 1) * 256);
   const result = chunkSurface({ Level: { Sections: [{ Y: 7, Blocks: blocks }] } }, true);
   assert.equal(result.heights[0], 116);
-  assert.equal(result.colors[0], blockColor("netherrack"));
+  assert.equal(result.colors[0], netherShade(blockColor("netherrack")));
 
 });
 
@@ -336,11 +353,11 @@ test("Bedrock subchunks support v1/v8/v9, zero-bit palettes, negative heights, a
   const mixed = bedrockLayer(Buffer.concat([Buffer.from([9, 1, 0]), bedrockStorage(["air", "water"], (i) => Number(i === index))]), 0);
   assert.equal(mixed.block(12 * 256 + 9 * 16 + 3), "minecraft:water");
   assert.equal(mixed.block(12 * 256 + 3 * 16 + 9), "air");
-  assert.equal(surfaceFromLayers([mixed]).colors[9 * 16 + 3], blockColor("water"));
+  near(rgb(surfaceFromLayers([mixed]).colors[9 * 16 + 3]).slice(0, 3), waterOverVoid().slice(0, 3));
   assert.equal(surfaceFromLayers([mixed]).heights[9 * 16 + 3], 12);
   const numeric = Buffer.alloc(6145);
   numeric[1 + index] = 8;
-  assert.equal(surfaceFromLayers([bedrockLayer(numeric, 0)]).colors[9 * 16 + 3], blockColor("water"));
+  near(rgb(surfaceFromLayers([bedrockLayer(numeric, 0)]).colors[9 * 16 + 3]).slice(0, 3), waterOverVoid().slice(0, 3));
   assert.throws(() => bedrockLayer(Buffer.from([9, 1, 0, 3]), 0), /MC_MAP_CORRUPT/);
   assert.throws(() => bedrockLayer(bedrockSubchunk(1, "stone"), 0), /MC_MAP_CORRUPT/);
 });
@@ -383,14 +400,14 @@ test("Bedrock map snapshots read a live locked database, isolate dimensions, ref
   for (const id of [1, 2]) {
     const world = worlds.find((item) => item.dimensionId === id);
     const result = await service.tile("server", world.id, 0, 0);
-    assert.deepEqual(pixels(result)(0, 0), rgb(blockColor(id === 1 ? "netherrack" : "end_stone")));
+    assert.deepEqual(pixels(result)(0, 0), rgb(id === 1 ? netherShade(blockColor("netherrack")) : blockColor("end_stone")));
   }
   assert.deepEqual(await hashes(directory), before);
   await live.put(bedrockKey(0, 0, 0, 47, -4), bedrockSubchunk(-4, "water"));
   assert.equal(await service.tile("server", overworld.id, 0, 0), tile);
   assert.equal(await service.scene("server", overworld.id, 0, 0), scene);
   await service.worlds("server", true);
-  assert.deepEqual(pixels(await service.tile("server", overworld.id, 0, 0))(0, 0), rgb(blockColor("water")));
+  near(pixels(await service.tile("server", overworld.id, 0, 0))(0, 0), waterOverVoid());
   assert.equal((await decodeSceneTile(await service.scene("server", overworld.id, 0, 0))).animated, true);
   await service.dispose();
   assert(await live.get(bedrockKey(0, 0, 0, 47, -4)));
