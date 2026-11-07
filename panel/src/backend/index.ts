@@ -53,6 +53,7 @@ export function registerWorldMapRoutes(ctx: MapPanelContext) {
               return (event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate)(Number(value));
             };
             Object.assign(data, { world: request.query.world, x: coordinate(request.query.x), z: coordinate(request.query.z) });
+            if (event === MAP_SCENE_EVENT) data.compress = request.query.compress !== "0";
           } else data.refresh = request.query.refresh === "1";
           request.body = await new ctx.remote.Request(node).request(event, data, 30_000);
         } catch (error) { request.body = error; }

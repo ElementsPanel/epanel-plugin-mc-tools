@@ -2,7 +2,7 @@ import { BufferAttribute, Color, Group, InstancedBufferAttribute, InstancedBuffe
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { MAP_LIMIT, MAP_MIN_Y, MAP_MAX_Y, MAP_SCENE_SIZE, type MapSceneTile, type MapWorld } from "../../../shared/map";
 import type { Camera, MapRenderer, MapViewState } from "./viewport";
-import { decodeScene } from "./scene-codec";
+import { decodeSceneTile } from "./scene-codec";
 import { sceneMaterials } from "./scene-materials";
 import { MAP_FOV, PERSPECTIVE_TRANSITION_MS, transitionPose, transitionProjection } from "./perspective-transition";
 import { SceneKind } from "../../../shared/scene";
@@ -435,7 +435,7 @@ export class SceneViewport implements MapRenderer {
     try {
       const result = await this.load(this.world.id, item.x, item.z, signal);
       if (signal.aborted) return;
-      const decoded = decodeScene(result);
+      const decoded = await decodeSceneTile(result);
       if (!this.room(decoded.count, item)) { this.skipped.add(key); return; }
       const group = new Group(); group.visible = false;
       group.position.set(item.x * SIZE - this.origin.x, 0, item.z * SIZE - this.origin.z);

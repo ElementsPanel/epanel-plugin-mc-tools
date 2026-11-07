@@ -2,6 +2,7 @@ import { ctx } from "@elements-panel/sdk";
 import type { MapInstances, MapNode, MapSettings, MapTile, MapSceneTile, MapWorld, PublicMapCatalog, PublicMapLinks } from "../../../shared/map";
 import { t } from "../settings";
 import type { EnableRconResult, MapPlayerRoster } from "../../../shared/map-players";
+import { canInflateScene } from "./scene-codec";
 
 export function mapError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -49,7 +50,7 @@ export function worldMapApi(instanceUuid: string, daemonId: string) {
       return api.request<MapWorld[]>("worlds", { ...scope, refresh: refresh ? "1" : "0" }, signal);
     },
     scene: (world: string, x: number, z: number, signal: AbortSignal) => api.request<MapSceneTile>("scene", {
-      ...scope, world, x: String(x), z: String(z)
+      ...scope, world, x: String(x), z: String(z), compress: canInflateScene() ? "1" : "0"
     }, signal),
     tile: (world: string, x: number, z: number, signal: AbortSignal) => api.request<MapTile>("tile", {
       ...scope, world, x: String(x), z: String(z)
@@ -86,7 +87,7 @@ export function publicWorldMapApi(map: string) {
     players: (signal: AbortSignal, time = true) => publicRequest<MapPlayerRoster>("players", { map, time: time ? "1" : "0" }, signal),
     worlds: (signal: AbortSignal, refresh = false) => publicRequest<MapWorld[]>("worlds", { map, refresh: refresh ? "1" : "0" }, signal),
     scene: (_world: string, x: number, z: number, signal: AbortSignal) => publicRequest<MapSceneTile>("scene", {
-      map, x: String(x), z: String(z)
+      map, x: String(x), z: String(z), compress: canInflateScene() ? "1" : "0"
     }, signal),
     tile: (_world: string, x: number, z: number, signal: AbortSignal) => publicRequest<MapTile>("tile", {
       map, x: String(x), z: String(z)

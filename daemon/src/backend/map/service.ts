@@ -93,20 +93,21 @@ export class WorldMapService {
     await this.snapshots.dispose();
   }
 
-  async scene(instanceUuid: string, worldId: string, x: number, z: number): Promise<MapSceneTile> {
+  async scene(instanceUuid: string, worldId: string, x: number, z: number, options: { compress?: boolean } = {}): Promise<MapSceneTile> {
     mapSceneCoordinate(x); mapSceneCoordinate(z);
     const world = (await this.worlds(instanceUuid)).find(item => item.id === worldId);
     if (!world) throw new Error("MC_MAP_WORLD_MISSING");
-    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":surface:" + x + ":" + z;
+    const compress = options.compress !== false;
+    const key = world.root + ":" + world.id + ":" + (this.revisions.get(world.root) || 0) + ":surface:" + x + ":" + z + (compress ? ":gz" : "");
     const pending = this.scenePending.get(key);
     if (pending) return pending;
-    const task = this.limited(() => this.renderScene(world, key, x, z));
+    const task = this.limited(() => this.renderScene(world, key, x, z, compress));
     this.scenePending.set(key, task);
     try { return await task; }
     finally { this.scenePending.delete(key); }
   }
 
-  private async renderScene(world: SavedWorld, key: string, tileX: number, tileZ: number): Promise<MapSceneTile> {
+  private async renderScene(world: SavedWorld, key: string, tileX: number, tileZ: number, compress = true): Promise<MapSceneTile> {
     const cached = (stamp: string) => {
       const previous = this.sceneCache.get(key);
       if (previous?.stamp !== stamp) return;
@@ -114,12 +115,13 @@ export class WorldMapService {
       return previous.tile;
     };
     const finish = async (stamp: string, chunks: SceneChunk[], neighbors: SceneChunk[], warnings: number) => {
-      const tile = { ...await meshScene(chunks, world.dimension === "minecraft:the_nether", () => this.disposed, neighbors), chunks: chunks.length, warnings };
+      const tile = { ...await meshScene(chunks, world.dimension === "minecraft:the_nether", () => this.disposed, neighbors, compress), chunks: chunks.length, warnings };
       if (!this.disposed && !warnings && !tile.limited) {
         this.sceneBytes -= this.sceneCache.get(key)?.bytes || 0;
-        const bytes = tile.quads.length + tile.heights.length + (tile.tints?.length ?? 0);
+        const bytes = tile.payload?.length ?? (tile.quads?.length ?? 0) + (tile.heights?.length ?? 0) + (tile.tints?.length ?? 0);
         this.sceneCache.set(key, { stamp, tile, bytes }); this.sceneBytes += bytes;
-        while (this.sceneBytes > 48 * 1024 * 1024 || this.sceneCache.size > 256) {
+        // Compressed tiles are ~20 KB, so a thousand of them cost about 20 MB of RAM.
+        while (this.sceneBytes > 48 * 1024 * 1024 || this.sceneCache.size > 1024) {
           const oldest = this.sceneCache.keys().next().value!;
           this.sceneBytes -= this.sceneCache.get(oldest)!.bytes;
           this.sceneCache.delete(oldest);

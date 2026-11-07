@@ -11,18 +11,49 @@ function bytes(value: string, maximum: number) {
   catch { throw new Error("MC_MAP_CORRUPT"); }
 }
 
+/** The three geometry buffers a tile carries, already decoded. */
+export interface SceneParts { quads: Uint8Array; tints?: Uint8Array; heights: Uint8Array; legacyTints?: boolean }
+
+/** True when this browser can inflate the compressed tile format. */
+export const canInflateScene = () => typeof DecompressionStream === "function";
+
+/** Splits a gzip payload: three u32le lengths followed by the three buffers. */
+export async function inflateScene(tile: MapSceneTile): Promise<SceneParts> {
+  const packed = bytes(tile.payload, MAP_SCENE_MAX_QUADS * 16);
+  let raw: Uint8Array;
+  try {
+    const stream = new Blob([packed]).stream().pipeThrough(new DecompressionStream("gzip"));
+    raw = new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch { throw new Error("MC_MAP_CORRUPT"); }
+  if (raw.length < 12) throw new Error("MC_MAP_CORRUPT");
+  const header = new DataView(raw.buffer, raw.byteOffset, 12);
+  const quadBytes = header.getUint32(0, true), tintBytes = header.getUint32(4, true), heightBytes = header.getUint32(8, true);
+  if (quadBytes + tintBytes + heightBytes !== raw.length - 12) throw new Error("MC_MAP_CORRUPT");
+  let at = raw.byteOffset + 12;
+  const quads = raw.subarray(at, at + quadBytes); at += quadBytes;
+  const tints = tintBytes ? raw.subarray(at, at + tintBytes) : undefined; at += tintBytes;
+  return { quads, tints, heights: raw.subarray(at, at + heightBytes) };
+}
+
+/** Decodes either wire form; the compressed one is inflated first. */
+export async function decodeSceneTile(tile: MapSceneTile) {
+  if (!tile?.gzip) return decodeScene(tile);
+  return decodeScene(tile, await inflateScene(tile));
+}
+
 /** Validate the bounded wire format before allocating GPU buffers. */
-export function decodeScene(tile: MapSceneTile) {
+export function decodeScene(tile: MapSceneTile, parts?: SceneParts) {
   if (tile?.version !== 1 || !Number.isInteger(tile.chunks) || tile.chunks < 0 || tile.chunks > 4 || !Number.isInteger(tile.warnings) || tile.warnings < 0) throw new Error("MC_MAP_CORRUPT");
-  const raw = bytes(tile.quads, MAP_SCENE_MAX_QUADS * 16), elevation = bytes(tile.heights, MAP_SCENE_SIZE ** 2 * 2);
+  const raw = parts?.quads ?? bytes(tile.quads, MAP_SCENE_MAX_QUADS * 16), elevation = parts?.heights ?? bytes(tile.heights, MAP_SCENE_SIZE ** 2 * 2);
   if (raw.length % 16 || raw.length > MAP_SCENE_MAX_QUADS * 16 || elevation.length !== MAP_SCENE_SIZE ** 2 * 2) throw new Error("MC_MAP_CORRUPT");
   // Older cached scenes interleaved RGB with two light bytes. Reuse only their
   // colors; lighting is no longer read or uploaded to the renderer.
-  const tintStride = tile.tints === undefined ? 5 : 3;
-  const tintData = tile.tints ?? tile.shading;
-  const tints = tintData === undefined ? undefined : bytes(tintData, MAP_SCENE_MAX_QUADS * 4 * tintStride);
+  const tintStride = parts?.legacyTints || (parts === undefined && tile.tints === undefined) ? 5 : 3;
+  const tintData = parts?.tints ?? (parts ? undefined : tile.tints ?? tile.shading);
+  const tints = tintData === undefined ? undefined : (parts?.tints ?? bytes(tintData as string, MAP_SCENE_MAX_QUADS * 4 * tintStride));
   if (tints && tints.length !== raw.length / 16 * 4 * tintStride) throw new Error("MC_MAP_CORRUPT");
-  const data = new DataView(raw.buffer), heightsData = new DataView(elevation.buffer);
+  // Parts arrive as subarrays of one decompressed buffer, so honour their offsets.
+  const data = new DataView(raw.buffer, raw.byteOffset, raw.byteLength), heightsData = new DataView(elevation.buffer, elevation.byteOffset, elevation.byteLength);
   const heights = Int16Array.from({ length: MAP_SCENE_SIZE ** 2 }, (_, index) => heightsData.getInt16(index * 2, true));
   if (heights.some(value => value !== -32768 && (value < MAP_MIN_Y || value > MAP_MAX_Y))) throw new Error("MC_MAP_CORRUPT");
   const groups: number[][] = Array.from({ length: SCENE_KIND_COUNT }, () => []);

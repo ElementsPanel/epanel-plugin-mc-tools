@@ -4,7 +4,7 @@ const { loader } = require("./helpers.cjs");
 const load = loader();
 const { meshScene } = load("daemon/src/backend/map/scene.ts");
 const { surfaceFromLayers } = load("daemon/src/backend/map/chunk.ts");
-const { decodeScene } = load("panel/src/map/scene-codec.ts");
+const { decodeScene, decodeSceneTile } = load("panel/src/map/scene-codec.ts");
 const { SceneKind, minecraftAssets, sceneTextures, SCENE_GRASS_OVERLAY, SCENE_GROUND } = load("shared/scene.ts");
 const { MAP_SCENE_MAX_QUADS, mapSceneCoordinate } = load("shared/map.ts");
 const layer = (y, block) => ({ y, block: typeof block === "function" ? index => block(index & 15, index >> 8, (index >> 4) & 15) : () => block });
@@ -439,4 +439,25 @@ test("scene decoding rejects unbounded or malformed geometry before building ren
   for (const value of [null, "0", Infinity, 0.5, 937501, -937501]) assert.throws(() => mapSceneCoordinate(value), /MC_MAP_INVALID/);
   assert.equal(mapSceneCoordinate(-937500), -937500);
   await assert.rejects(meshScene([chunk([layer(0, "stone")])], false, () => true), /MC_MAP_UNAVAILABLE/);
+});
+
+test("compressed scene tiles inflate to the same geometry and reject damaged payloads", async () => {
+  const chunks = [chunk([layer(4, "grass_block")])];
+  const raw = await tile(chunks);
+  const packed = { ...await meshScene(chunks, false, () => false, [], true), chunks: 1, warnings: 0 };
+  assert.equal(packed.gzip, true);
+  assert.equal(packed.quads, undefined, "the compressed form carries one payload instead of three strings");
+  const expected = decodeScene(raw), actual = await decodeSceneTile(packed);
+  assert.equal(actual.count, expected.count);
+  assert.equal(actual.meshes.length, expected.meshes.length);
+  assert.deepEqual(actual.heights, expected.heights);
+  assert.equal(actual.animated, expected.animated);
+  assert(packed.payload.length < raw.quads.length + raw.tints.length + raw.heights.length, "compression must not grow the payload");
+
+  for (const payload of ["bm90IGd6aXA=", "", undefined]) {
+    await assert.rejects(() => decodeSceneTile({ ...packed, payload }), /MC_MAP_CORRUPT/, String(payload));
+  }
+  // The header lengths must describe the inflated body exactly.
+  const gzip = require("node:zlib").gzipSync(Buffer.alloc(20));
+  await assert.rejects(() => decodeSceneTile({ ...packed, payload: gzip.toString("base64") }), /MC_MAP_CORRUPT/);
 });

@@ -1,3 +1,5 @@
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
 import { MAP_MAX_Y, MAP_MIN_Y, MAP_SCENE_MAX_QUADS, MAP_SCENE_SIZE, type MapSceneTile } from "../../../../shared/map";
 import { SceneKind, SCENE_EMISSIVE, SCENE_GRASS_OVERLAY, SCENE_GROUND, SCENE_MODEL } from "../../../../shared/scene";
 import type { BlockLayer } from "./chunk";
@@ -13,7 +15,9 @@ const waterBody = new Set(["minecraft:water", "water", "minecraft:flowing_water"
 const SIZE = MAP_SCENE_SIZE, AREA = SIZE * SIZE;
 const STRIDE = SIZE + 2, PADDED_AREA = STRIDE * STRIDE;
 /** Cull hidden voxel faces, then merge coplanar faces of the same block material. */
-export async function meshScene(chunks: SceneChunk[], nether = false, disposed = () => false, neighbors: SceneChunk[] = []): Promise<Pick<MapSceneTile, "version" | "quads" | "tints" | "heights" | "limited">> {
+const deflate = promisify(gzip);
+
+export async function meshScene(chunks: SceneChunk[], nether = false, disposed = () => false, neighbors: SceneChunk[] = [], compress = false): Promise<Pick<MapSceneTile, "version" | "quads" | "tints" | "heights" | "gzip" | "payload" | "limited">> {
   const cap = nether ? 120 : MAP_MAX_Y;
   const layers = chunks.flatMap(chunk => chunk.layers).filter(layer => !layer.empty && layer.y * 16 <= cap);
   const minY = layers.length ? Math.max(MAP_MIN_Y, Math.min(...layers.map(layer => layer.y * 16))) : 0;
@@ -261,5 +265,13 @@ export async function meshScene(chunks: SceneChunk[], nether = false, disposed =
       await new Promise<void>(resolve => setImmediate(resolve));
     }
   }
-  return { version: 1, quads: bytes.subarray(0, count * 16).toString("base64"), tints: tints.subarray(0, count * 12).toString("base64"), heights: heights.toString("base64"), limited };
+  const quadBytes = bytes.subarray(0, count * 16), tintBytes = tints.subarray(0, count * 12);
+  if (!compress) {
+    return { version: 1, quads: quadBytes.toString("base64"), tints: tintBytes.toString("base64"), heights: heights.toString("base64"), limited };
+  }
+  // Raw geometry compresses about ten times, which matters far more than the CPU cost.
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(quadBytes.length, 0); header.writeUInt32LE(tintBytes.length, 4); header.writeUInt32LE(heights.length, 8);
+  const payload = await deflate(Buffer.concat([header, quadBytes, tintBytes, heights]), { level: 6 });
+  return { version: 1, gzip: true, payload: payload.toString("base64"), limited };
 }

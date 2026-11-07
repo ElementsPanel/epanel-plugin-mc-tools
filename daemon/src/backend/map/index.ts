@@ -28,7 +28,11 @@ export function registerWorldMap(ctx: McToolsDaemonContext) {
           if (typeof data.world !== "string" || !/^[a-f0-9]{24}$/.test(data.world)) throw new Error("MC_MAP_INVALID");
           const scene = event === MAP_SCENE_EVENT;
           const coordinate = scene ? mapSceneCoordinate : mapCoordinate;
-          ctx.protocol.response(request, await service[scene ? "scene" : "tile"](data.instanceUuid, data.world, coordinate(data.x), coordinate(data.z)));
+          const x = coordinate(data.x), z = coordinate(data.z);
+          // Browsers without DecompressionStream ask for the raw tile instead.
+          ctx.protocol.response(request, scene
+            ? await service.scene(data.instanceUuid, data.world, x, z, { compress: data.compress !== false })
+            : await service.tile(data.instanceUuid, data.world, x, z));
         }
       } catch (error) {
         const message = error instanceof Error && /^MC_MAP_[A-Z_]+$/.test(error.message) ? error.message : "MC_MAP_READ_FAILED";

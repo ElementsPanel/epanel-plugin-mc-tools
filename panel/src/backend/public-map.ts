@@ -68,6 +68,7 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
         else if (event !== MAP_WORLDS_EVENT) {
           const coordinate = event === MAP_SCENE_EVENT ? mapSceneCoordinate : mapCoordinate;
           Object.assign(data, { world: source.world, x: integer(request.query.x, coordinate), z: integer(request.query.z, coordinate) });
+          if (event === MAP_SCENE_EVENT) data.compress = request.query.compress !== "0";
         } else if (request.query.refresh === "1") {
           const key = source.daemonId + "/" + source.instanceUuid;
           const now = Date.now();
@@ -95,10 +96,12 @@ export function registerPublicMapRoutes(ctx: PublicMapContext, settings: () => M
           request.body = [{ id: map.id, name: current.name, dimension: world.dimension, spawn: { x: world.spawn.x, z: world.spawn.z } }];
         } else if (event === MAP_SCENE_EVENT) {
           const scene = response as MapSceneTile;
-          request.body = { version: scene.version, quads: scene.quads,
-            ...(scene.tints === undefined ? {} : { tints: scene.tints }),
-            ...(scene.shading === undefined ? {} : { shading: scene.shading }),
-            heights: scene.heights, chunks: scene.chunks, warnings: scene.warnings, limited: scene.limited };
+          request.body = scene.gzip
+            ? { version: scene.version, gzip: true as const, payload: scene.payload, chunks: scene.chunks, warnings: scene.warnings, limited: scene.limited }
+            : { version: scene.version, quads: scene.quads,
+              ...(scene.tints === undefined ? {} : { tints: scene.tints }),
+              ...(scene.shading === undefined ? {} : { shading: scene.shading }),
+              heights: scene.heights, chunks: scene.chunks, warnings: scene.warnings, limited: scene.limited };
         } else {
           const tile = response as MapTile;
           request.body = { image: tile.image, chunks: tile.chunks, warnings: tile.warnings };

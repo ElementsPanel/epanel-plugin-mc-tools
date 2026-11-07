@@ -15,7 +15,7 @@ const { bedrockKey, bedrockLayer, bedrockSurface } = load("daemon/src/backend/ma
 const { BedrockSnapshots } = load("daemon/src/backend/map/snapshot.ts");
 const { chunkSurface, paletteReader, surfaceFromLayers } = load("daemon/src/backend/map/chunk.ts");
 const { blockColor } = load("daemon/src/backend/map/colors.ts");
-const { decodeScene } = load("panel/src/map/scene-codec.ts");
+const { decodeScene, decodeSceneTile } = load("panel/src/map/scene-codec.ts");
 
 async function temporary(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "epanel-map-test-"));
@@ -145,16 +145,17 @@ test("Java 3D scenes read real region blocks, preserve negative coordinates, ign
   const world = (await service.worlds("server"))[0];
   const [a, b] = await Promise.all([service.scene("server", world.id, 0, 0), service.scene("server", world.id, 0, 0)]);
   assert.equal(a, b); assert.equal(a.chunks, 1); assert.equal(a.warnings, 0);
-  assert.deepEqual([...new Set(decodeScene(a).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
-  assert.equal(decodeScene(a).heights[0], -1);
-  const negative = decodeScene(await service.scene("server", world.id, -1, -1));
+  assert.equal(a.gzip, true, "3D tiles ship compressed by default");
+  assert.deepEqual([...new Set((await decodeSceneTile(a)).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
+  assert.equal((await decodeSceneTile(a)).heights[0], -1);
+  const negative = await decodeSceneTile(await service.scene("server", world.id, -1, -1));
   assert.equal(negative.heights[1023], 79); assert.equal(negative.heights[0], -32768);
   assert.equal(await service.scene("server", world.id, 0, 0, -8), a); assert.equal(await service.scene("server", world.id, 0, 0), a);
   assert.deepEqual(await hashes(path.join(directory, "region")), before);
   await writeRegion(directory, 0, 0, javaChunk("water", -1), 3);
   await service.worlds("server", true);
   const refreshed = await service.scene("server", world.id, 0, 0);
-  assert.notDeepEqual(refreshed.quads, a.quads); assert.equal(decodeScene(refreshed).animated, true);
+  assert.notDeepEqual(refreshed.payload, a.payload); assert.equal((await decodeSceneTile(refreshed)).animated, true);
   for (const coordinate of [937501, -937501, 0.5]) await assert.rejects(service.scene("server", world.id, coordinate, 0), /MC_MAP_INVALID/);
   await assert.rejects(service.scene("server", "0".repeat(24), 0, 0), /MC_MAP_WORLD_MISSING/);
 });
@@ -373,8 +374,8 @@ test("Bedrock map snapshots read a live locked database, isolate dimensions, ref
   assert.deepEqual(pixels(tile)(0, 0), rgb(blockColor("grass")));
   const scene = await service.scene("server", overworld.id, 0, 0);
   assert.equal(scene.chunks, 1); assert.equal(scene.warnings, 0);
-  assert.equal(decodeScene(scene).heights[0], -49);
-  assert.equal(decodeScene(await service.scene("server", overworld.id, -1, -1)).heights[1023], 79);
+  assert.equal((await decodeSceneTile(scene)).heights[0], -49);
+  assert.equal((await decodeSceneTile(await service.scene("server", overworld.id, -1, -1))).heights[1023], 79);
   assert.deepEqual(pixels(await service.tile("server", overworld.id, -1, -1))(127, 127), rgb(blockColor("sand")));
   const partial = await service.tile("server", overworld.id, 1, 0);
   assert.equal(partial.warnings, 1);
@@ -390,7 +391,7 @@ test("Bedrock map snapshots read a live locked database, isolate dimensions, ref
   assert.equal(await service.scene("server", overworld.id, 0, 0), scene);
   await service.worlds("server", true);
   assert.deepEqual(pixels(await service.tile("server", overworld.id, 0, 0))(0, 0), rgb(blockColor("water")));
-  assert.equal(decodeScene(await service.scene("server", overworld.id, 0, 0)).animated, true);
+  assert.equal((await decodeSceneTile(await service.scene("server", overworld.id, 0, 0))).animated, true);
   await service.dispose();
   assert(await live.get(bedrockKey(0, 0, 0, 47, -4)));
 });
@@ -459,7 +460,7 @@ test("map panel routes run instance authorization before forwarding and validate
   assert.equal(calls.length, count);
   assert.equal((await request("/scene", { world: "a".repeat(24), x: "937501", z: "0" })).body.message, "MC_MAP_INVALID");
   await request("/scene", { world: "a".repeat(24), x: "-937500", z: "0", y: "0" });
-  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world: "a".repeat(24), x: -937500, z: 0 } });
+  assert.deepEqual(calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world: "a".repeat(24), x: -937500, z: 0, compress: true } });
   assert.deepEqual(checks.slice(-3), ["permission", "validate", "instance"]);
 });
 
@@ -481,8 +482,12 @@ test("daemon map protocol returns public identifiers and hides filesystem errors
   assert.deepEqual(Object.keys(response[0]).sort(), ["dimension", "id", "name", "spawn"]);
   const world = response[0].id;
   await events.get("mc-tools/map/scene")({}, { instanceUuid: "server", world, x: 0, z: 0 });
-  assert.deepEqual([...new Set(decodeScene(response).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(Object.keys(response).sort(), ["chunks", "gzip", "limited", "payload", "version", "warnings"]);
+  assert.deepEqual([...new Set((await decodeSceneTile(response)).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
+  // A browser without DecompressionStream can still ask for the raw tile.
+  await events.get("mc-tools/map/scene")({}, { instanceUuid: "server", world, x: 0, z: 0, compress: false });
   assert.deepEqual(Object.keys(response).sort(), ["chunks", "heights", "limited", "quads", "tints", "version", "warnings"]);
+  assert.deepEqual([...new Set(decodeScene(response).meshes.flatMap(mesh => [...mesh.faces]))].sort(), [0, 1, 2, 3, 4, 5]);
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0 });
   assert.equal(response.chunks, 1);
   await events.get("mc-tools/map/tile")({}, { instanceUuid: "server", world, x: 0, z: 0, y: 0 });

@@ -160,7 +160,7 @@ test("anonymous 3D scenes use only the configured save, validate scene coordinat
   const scene = { version: 1, quads: "mesh", heights: "height", chunks: 4, warnings: 0, limited: false };
   f.respond(async () => ({ ...scene, root: "/private/save", world: hiddenWorld }));
   assert.deepEqual((await f.request("/scene", { map: "survival", x: "-937500", z: "0", y: "0", world: hiddenWorld, uuid: "other", daemonId: "other" })).body, scene);
-  assert.deepEqual(f.calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world, x: -937500, z: 0 } });
+  assert.deepEqual(f.calls.at(-1), { event: "mc-tools/map/scene", data: { instanceUuid: "server", world, x: -937500, z: 0, compress: true } });
   assert.equal(f.checks.length, 0);
   assert.equal((await f.request("/scene", { map: "unlisted", x: "0", z: "0" })).body.message, "MC_MAP_PUBLIC_NOT_FOUND");
   for (const query of [{ x: "937501", z: "0" }, { x: ["0"], z: "0" }]) {
