@@ -62,5 +62,6 @@
     "leveldb-zlib": "^1.2.1",
     "prismarine-nbt": "^2.8.0",
     "three": "^0.187.0"
-  }
+  },
+  "displayName": "MC Tools"
 }
