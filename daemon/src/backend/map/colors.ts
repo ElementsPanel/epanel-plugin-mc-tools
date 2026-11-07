@@ -1,3 +1,7 @@
+import { minecraftAssets } from "../../../../shared/scene";
+import topColors from "../../../../shared/top-colors.json";
+import { blockTintColor } from "./materials";
+
 const named: Record<string, number> = {
   grass_block: 0x7eaa42, grass: 0x7eaa42, moss_block: 0x6c8c35, pale_moss_block: 0x909887,
   water: 0x376eb8, flowing_water: 0x376eb8, lava: 0xe76c16, flowing_lava: 0xe76c16, sand: 0xd8cb8e, red_sand: 0xb66532,
@@ -58,17 +62,31 @@ export function isAir(name: string) {
 }
 
 const colorCache = new Map<string, number>();
-export function blockColor(block: string): number {
-  const cached = colorCache.get(block);
+/** Multiply a flat surface color by a biome tint, matching the scene shader. */
+function tint(color: number, tintColor: number): number {
+  const r = Math.round(((color >> 16) & 255) * ((tintColor >> 16) & 255) / 255);
+  const g = Math.round(((color >> 8) & 255) * ((tintColor >> 8) & 255) / 255);
+  const b = Math.round((color & 255) * (tintColor & 255) / 255);
+  return (r << 16) | (g << 8) | b;
+}
+/** Flat map color: the average top-face sprite, tinted like the in-game renderer. */
+export function blockColor(block: string, biome?: string): number {
+  const key = biome === undefined ? block : block + "|" + biome;
+  const cached = colorCache.get(key);
   if (cached !== undefined) return cached;
-  const value = colorOf(block);
+  const value = colorOf(block, biome);
   if (colorCache.size > 4096) colorCache.clear();
-  colorCache.set(block, value);
+  colorCache.set(key, value);
   return value;
 }
 
-function colorOf(block: string): number {
+function colorOf(block: string, biome?: string): number {
   const name = block.replace(/^.*:/, "");
+  const top = topColors[name === "grass" ? "grass_block" : name];
+  if (top !== undefined) {
+    const colors = minecraftAssets.biomes[biome ?? "minecraft:plains"] ?? minecraftAssets.biomes["minecraft:plains"];
+    return tint(top, blockTintColor(name === "grass" ? "grass_block" : name, colors));
+  }
   if (named[name] !== undefined) return named[name];
   if (name.includes("cherry_leaves")) return 0xd99bb6;
   if (name.includes("pale_oak_leaves")) return 0x8f9783;

@@ -115,7 +115,7 @@ export function surfaceFromLayers(layers: BlockLayer[], nether = false) {
     const properties = layer.properties?.(index);
     const fluid = layer.fluid?.(index) ?? blockFluid(name, properties);
     if (fluid) name = fluid;
-    colors[column] = blockColor(name);
+    colors[column] = blockColor(name, layer.biome?.(index));
     heights[column] = height;
   };
   for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {

@@ -41,6 +41,12 @@ export function blockStateKey(block: string, properties?: Properties): string {
   return name + (index !== undefined ? "[state=" + index + "]" : upperHalf(properties) ? "[half=upper]" : "");
 }
 
+/** Biome tint color for a block, matching BlockColors' per-block registration. */
+export function blockTintColor(name: string, colors: readonly [number, number, number, number]): number {
+  return name === "water" ? colors[2] : name === "leaf_litter" ? colors[3] : name === "spruce_leaves" ? 0x619961 : name === "birch_leaves" ? 0x80a755
+    : foliageTint.has(name) ? colors[1] : name === "lily_pad" ? 0x208030 : name === "redstone_wire" ? 0x4c0000 : grassTint.has(name) ? colors[0] : 0xffffff;
+}
+
 const missingModel: MinecraftBlock = { faces: [0, 0, 0, 0, 0, 0], tint: 0, overlay: 0, kind: SceneKind.Opaque };
 export function blockMaterial(block: string, biome = "minecraft:plains", properties?: Properties): Material {
   const name = blockName(block), index = variantIndex(name, properties);
@@ -50,8 +56,7 @@ export function blockMaterial(block: string, biome = "minecraft:plains", propert
   const model: MinecraftBlock = groundPlants.has(name) && sourceModel.shape !== "ground" ? { ...sourceModel, shape: "ground" } : sourceModel;
   const colors = minecraftAssets.biomes[biome] ?? minecraftAssets.biomes["minecraft:plains"];
   const biomeTint = name === "leaf_litter" ? 3 : foliageTint.has(name) ? 1 : grassTint.has(name) ? 0 : undefined;
-  const color = name === "water" ? colors[2] : name === "leaf_litter" ? colors[3] : name === "spruce_leaves" ? 0x619961 : name === "birch_leaves" ? 0x80a755
-    : foliageTint.has(name) ? colors[1] : name === "lily_pad" ? 0x208030 : name === "redstone_wire" ? 0x4c0000 : grassTint.has(name) ? colors[0] : 0xffffff;
+  const color = blockTintColor(name, colors);
   return { name, color, model, biomeTint, kind: model.shape || plants.test(name) ? SceneKind.Plant : model.kind,
     ...(model.fire ? { fire: fireConnections(properties) } : {}),
     emissive: /^(?:fire|soul_fire|lava|glowstone|sea_lantern|shroomlight|jack_o_lantern|torch|soul_torch|lantern|soul_lantern|end_rod|ochre_froglight|verdant_froglight|pearlescent_froglight)$/.test(name) };
