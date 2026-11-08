@@ -219,8 +219,18 @@ export class MapPlayerService {
     try {
       root = await fs.realpath(instance.absoluteCwdPath());
       target = await javaRconConfiguration(root, instance.config.pingConfig?.ip);
-    } catch (error) { this.closeSession(id); throw error; }
+    } catch (error) {
+      this.closeSession(id);
+      // No readable RCON config (a fresh instance or an unusual layout): the
+      // map stays quiet instead of reporting an error on every poll.
+      if (error instanceof Error && error.message === "MC_MAP_RCON_CONFIG") {
+        roster.rconConfigured = false;
+        return roster;
+      }
+      throw error;
+    }
     roster.rconEnabled = target.enabled;
+    roster.rconConfigured = true;
     if (!target.enabled || !roster.running) { this.closeSession(id); return roster; }
     let session: Session | undefined;
     try {

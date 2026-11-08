@@ -225,7 +225,7 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
         <div class="mc-map-players-status" role="status">
           <p>{{ t('MC_PLAYERS_ONLINE') }}: {{ roster?.rconEnabled && roster.running && (!roster.warnings.length || roster.players.length) ? roster.players.length : '—' }}</p>
           <p v-if="roster && !roster.running">{{ t('MC_MAP_PLAYERS_STOPPED') }}</p>
-          <template v-if="roster?.edition === 'java' && !roster.rconEnabled">
+          <template v-if="roster?.edition === 'java' && roster.rconConfigured !== false && !roster.rconEnabled">
             <p>{{ t('MC_MAP_RCON_DISABLED') }}</p>
             <VBtn v-if="!publicMap" variant="text" @click="rconPrompt = true">{{ t('MC_MAP_RCON_PROMPT_TITLE') }}</VBtn>
           </template>

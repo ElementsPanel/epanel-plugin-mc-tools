@@ -68,7 +68,7 @@ const SERVER_SKIP = new Set(["plugins", "logs", "cache", "config", "libraries", 
   "world", "worlds", "world_nether", "world_the_end"]);
 
 /** MCDR keeps the real server in a nested working directory (usually `server/`). */
-async function javaServerRoots(instanceRoot: string) {
+export async function javaServerRoots(instanceRoot: string) {
   const found: string[] = [];
   const markers = new Set(["world", "world_nether", "world_the_end", "worlds"]);
   let scanned = 0;

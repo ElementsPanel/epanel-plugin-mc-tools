@@ -10,6 +10,8 @@ export interface MapPlayerRoster {
   edition: "java" | "bedrock";
   running: boolean;
   rconEnabled: boolean;
+  /** False when no readable server.properties exists, so the map stays quiet. */
+  rconConfigured?: boolean;
   players: MapPlayer[];
   warnings: string[];
   /** Live time of day in ticks (0–23999), keyed by saved world ID. */

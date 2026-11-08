@@ -27,7 +27,7 @@ export function useMapPlayers(api: MapPlayersApi, errorText: (error: unknown) =>
       if (abort.signal.aborted) return;
       calibrated = true;
       roster.value = value; error.value = enableError;
-      if (api.enableRcon && value.edition === "java" && !value.rconEnabled && !prompted) { prompted = true; prompt.value = true; }
+      if (api.enableRcon && value.edition === "java" && value.rconConfigured !== false && !value.rconEnabled && !prompted) { prompted = true; prompt.value = true; }
     } catch (reason) {
       if (!abort.signal.aborted) { error.value = errorText(reason); roster.value = undefined; }
     } finally { reading.value = false; }

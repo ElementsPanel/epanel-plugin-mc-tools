@@ -7,7 +7,7 @@ const { EventEmitter } = require("node:events");
 const { loader, deferred } = require("./helpers.cjs");
 const load = loader();
 const { readRconPlayers, readRconWorldTimes } = load("daemon/src/backend/map/players.ts");
-const { javaRconConfiguration } = load("daemon/src/backend/map/rcon-config.ts");
+const { javaRconConfiguration, enableJavaRcon } = load("daemon/src/backend/map/rcon-config.ts");
 
 test("RCON parses concatenated vanilla 26.2 entity replies, negative coordinates, dimensions and normalized facing", async () => {
   const calls = [];
@@ -246,6 +246,37 @@ test("setup retains escaped passwords and never restarts after invalid config or
     await assert.rejects(f.service.enable("server", true), /MC_MAP_RCON_(CONFIG|BUSY|WRITE_FAILED|UNSUPPORTED)/);
     assert.deepEqual(f.restarts, []); assert.equal(await fs.readFile(f.file, "utf8"), f.text);
   }
+});
+
+test("a Java instance without server.properties stays quiet instead of reporting a config error", async t => {
+  const f = await fixture(t);
+  await fs.rm(f.file);
+  const roster = await f.service.list("server");
+  assert.equal(roster.rconEnabled, false);
+  assert.equal(roster.rconConfigured, false);
+  assert.deepEqual(roster.warnings, []);
+  assert.deepEqual(roster.players, []);
+  assert.equal(f.reads.length, 0, "no RCON connection is attempted");
+});
+
+test("MCDR nested server roots supply RCON settings and receive the enable rewrite", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "epanel-map-mcdr-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const server = path.join(root, "server");
+  await fs.mkdir(path.join(root, "plugins"), { recursive: true });
+  await fs.mkdir(server, { recursive: true });
+  const file = path.join(server, "server.properties");
+  await fs.writeFile(file, "enable-rcon=true\nrcon.password=nested\nrcon.port=25577\n");
+  const config = await javaRconConfiguration(root);
+  assert.deepEqual({ enabled: config.enabled, port: config.port, password: config.password, levelName: config.levelName },
+    { enabled: true, port: 25577, password: "nested", levelName: "world" });
+
+  await fs.writeFile(file, "enable-rcon=false\nrcon.port=25578\n");
+  let allowed = 0;
+  assert.equal(await enableJavaRcon(root, () => allowed++), true);
+  assert.match(await fs.readFile(file, "utf8"), /^enable-rcon=true\nrcon.port=25578\n/);
+  assert.equal(await fs.stat(path.join(root, "server.properties")).catch(() => undefined), undefined, "the MCDR root is left untouched");
+  assert(allowed > 0);
 });
 
 test("concurrent confirmations cannot restart twice and restart failures leave a usable saved config", async t => {

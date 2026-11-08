@@ -31,6 +31,11 @@ test("opening a private map prompts once, cancellation makes no writes, and conf
   f.close(); assert(signals.every(signal => signal.aborted));
 });
 
+test("maps without a readable RCON config stay silent instead of prompting", async t => {
+  const f = mount(t, { players: async () => ({ ...roster(), rconConfigured: false }), enableRcon: async () => ({ changed: true, restartRequested: false }) });
+  await tick(); assert.equal(f.state.prompt, false); assert.equal(f.state.error, "");
+});
+
 test("public maps never prompt, stale reads are discarded on close, and restart failures remain visible after polling", async t => {
   const publicView = mount(t, { players: async () => roster() });
   await tick(); assert.equal(publicView.state.prompt, false);
