@@ -1,6 +1,6 @@
 {
   "name": "epanel-plugin-mc-tools",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "一些适用于 Minecraft 服务器的额外小工具。",
   "license": "Apache-2.0",
   "files": [
