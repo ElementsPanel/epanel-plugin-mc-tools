@@ -1,7 +1,7 @@
 {
   "name": "epanel-plugin-mc-tools",
   "version": "0.1.1",
-  "description": "Minecraft Java and Bedrock server status, saved world maps and player management for ElementsPanel",
+  "description": "一些适用于 Minecraft 服务器的额外小工具。",
   "license": "Apache-2.0",
   "files": [
     "panel/plugin.json",
