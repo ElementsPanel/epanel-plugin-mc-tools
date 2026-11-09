@@ -6,6 +6,7 @@ import type { MapPlayer } from "../../../shared/map-players";
 import { MAP_LIMIT } from "../../../shared/map";
 import type { MapMarker, MapMenuItem } from "../../../shared/embed";
 import { t } from "../settings";
+import { notification } from "@elementspanel/epanel-plugin-console/tools/vuetifyToast";
 import { mapError, publicWorldMapApi, worldMapApi } from "./api";
 import { MapViewport, type MapViewState } from "./viewport";
 import MapControls from "./MapControls.vue";
@@ -25,7 +26,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ view: [value: MapViewOptions]; "update:sidebarOpen": [value: boolean]; marker: [id: string]; menu: [id: string] }>();
 const api = props.publicMap ? publicWorldMapApi(props.publicMap) : worldMapApi(props.instanceUuid!, props.daemonId!);
 const { roster, worldTimes, reading: readingPlayers, enabling, prompt: rconPrompt, error: playerError, success: playerSuccess,
-  search: playerSearch, players, load: loadPlayers, enable: enableRcon, dismissError: dismissPlayerError } = useMapPlayers(api, mapError);
+  search: playerSearch, players, load: loadPlayers, enable: enableRcon } = useMapPlayers(api, mapError);
 const abort = new AbortController();
 const canvas = ref<HTMLCanvasElement>();
 const mapRoot = ref<HTMLElement>();
@@ -195,6 +196,22 @@ watch([roster, current], updateMarkers);
 watch(() => props.customMarkers, updateMarkers);
 watch(renderMode, value => viewport?.setMode(value));
 watch([() => state.x, () => state.z, () => state.zoom, renderMode], () => emit("view", view()));
+// Polling re-clears and re-sets the same failure, so each distinct message is
+// announced once instead of every few seconds.
+let lastError = "", lastPlayerError = "", lastPlayerSuccess = "";
+watch(error, value => {
+  if (!value || value === lastError) return;
+  lastError = value; notification.error(value);
+});
+watch(playerError, value => {
+  if (!value || value === lastPlayerError) return;
+  lastPlayerError = value; notification.error(value);
+});
+watch(playerSuccess, value => {
+  if (!value) { lastPlayerSuccess = ""; return; }
+  if (value === lastPlayerSuccess) return;
+  lastPlayerSuccess = value; notification.success(value);
+});
 onMounted(() => { void load(); });
 onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 </script>
@@ -249,11 +266,8 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
         <VIcon :icon="worldTimeIcon" size="18" aria-hidden="true" />
         <span>{{ worldTime }}</span>
       </div>
-      <div v-if="error || state.warnings || state.limited || playerError || playerSuccess" class="mc-map-notice">
-        <VAlert v-if="error" type="error" density="compact" role="alert">{{ error }}</VAlert>
-        <VAlert v-else-if="state.warnings || state.limited" type="warning" density="compact">{{ t(state.limited ? "MC_MAP_SCENE_LIMIT" : "MC_MAP_PARTIAL") }}</VAlert>
-        <VAlert v-if="playerError" type="error" density="compact" closable @click:close="dismissPlayerError">{{ playerError }}</VAlert>
-        <VAlert v-if="playerSuccess" type="success" density="compact" closable @click:close="playerSuccess = ''">{{ playerSuccess }}</VAlert>
+      <div v-if="state.warnings || state.limited" class="mc-map-notice">
+        <VAlert type="warning" density="compact">{{ t(state.limited ? "MC_MAP_SCENE_LIMIT" : "MC_MAP_PARTIAL") }}</VAlert>
       </div>
       <VProgressLinear v-if="loading || state.loading" indeterminate color="primary" class="mc-map-progress" :aria-label="t(renderMode === '3d' ? 'MC_MAP_3D_LOADING' : 'MC_MAP_LOADING')" />
       <canvas v-if="!loading && current" ref="canvas" :data-renderer="renderMode" :aria-label="t(renderMode === '3d' ? 'MC_MAP_3D_SCENE' : 'MC_MAP_TITLE')" tabindex="0" role="img" />

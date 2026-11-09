@@ -404,6 +404,8 @@ function mapComponent(overrides) {
   mod.require = (id) => {
     if (Object.hasOwn(overrides, id)) return overrides[id];
     if (id === "vuetify/components" || id.endsWith(".vue")) return {};
+    if (id === "@elementspanel/epanel-plugin-console/tools/vuetifyToast")
+      return { notification: { error() {}, success() {}, warning() {}, info() {} } };
     if (id === "../../../shared/map") return loader()("shared/map.ts");
     if (id === "./page") return loader()("panel/src/map/page.ts");
     if (id === "./player-state" || id === "./player-markers") return loader({ "../settings": { t: key => key } })("panel/src/map/" + id.slice(2) + ".ts");
@@ -418,10 +420,11 @@ test("map view validates coordinates, ignores old slice options, refreshes clock
     { id: "world", name: "Test", dimension: "minecraft:overworld", spawn: { x: 8, z: 16 } },
     { id: "nether", name: "Test", dimension: "minecraft:the_nether", spawn: { x: 1, z: 2 } }
   ];
-  const renderers = [], signals = [];
+  const renderers = [], signals = [], toasts = [];
   let live = { edition: "java", running: true, rconEnabled: true, players: [], warnings: [], worldTimes: { world: 0, nether: 6000 } };
   const Component = mapComponent({
     "../settings": { t: (key) => key },
+    "@elementspanel/epanel-plugin-console/tools/vuetifyToast": { notification: { error: (message) => toasts.push(message), success() {} } },
     "./api": { mapError: (error) => error.message, worldMapApi: () => ({ worlds: async (signal) => { signals.push(signal); return worlds; }, tile: () => {}, players: async () => live }) },
     "./viewport": { MapViewport: class {
       constructor(canvas, world, load, changed, y) { this.camera = { ...world.spawn, zoom: 2 }; this.world = world; this.layer = y; renderers.push(this); }
@@ -466,6 +469,8 @@ test("map view validates coordinates, ignores old slice options, refreshes clock
   view.x = "3.5";
   view.go();
   assert.equal(view.error, "MC_MAP_COORDINATES");
+  await vue.nextTick(); assert.deepEqual(toasts, ["MC_MAP_COORDINATES"], "the map reports errors through the panel toast");
+  view.go(); await vue.nextTick(); assert.deepEqual(toasts, ["MC_MAP_COORDINATES"], "a repeated failure is not announced again");
   view.x = "-128"; view.z = "256"; view.go();
   assert.deepEqual(renderers[2].target, { x: -128, z: 256 });
   assert.equal(view.layer, undefined); assert.equal(view.mode, undefined); assert.equal(view.applyHeight, undefined);

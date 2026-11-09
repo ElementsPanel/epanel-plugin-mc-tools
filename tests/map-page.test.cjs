@@ -18,6 +18,8 @@ function component(name, overrides = {}) {
   mod.require = id => {
     if (Object.hasOwn(overrides, id)) return overrides[id];
     if (id.endsWith(".vue") || id === "vuetify/components") return {};
+    if (id === "@elementspanel/epanel-plugin-console/tools/vuetifyToast")
+      return { notification: { error() {}, success() {}, warning() {}, info() {} } };
     if (id === "../settings") return { t: key => key };
     if (id === "../../../shared/map") return loader()("shared/map.ts");
     if (id === "../../../shared/embed") return loader()("shared/embed.ts");
