@@ -270,7 +270,7 @@ test("two-finger zoom uses layout coordinates under dialog scaling and updates t
   const detail = await f.ready(); detail.ready = true; detail.render(); f.frame();
   detail.renderTopDown = () => detail.render();
   const { worldPosition } = loader()("panel/src/map/viewport.ts");
-  const touch = (type, pointerId, x, y) => f.listeners.get(type)({ pointerType: "touch", button: 0, pointerId,
+  const touch = (type, pointerId, x, y) => f.listeners.get(type)({ type, pointerType: "touch", button: 0, pointerId,
     clientX: 10 + x * f.bounds.scale, clientY: 20 + y * f.bounds.scale });
   touch("pointerdown", 1, 100, 100); touch("pointerdown", 2, 300, 100);
   const anchor = worldPosition(f.view.camera, 800, 600, 200, 100);

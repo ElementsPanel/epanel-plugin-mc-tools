@@ -103,7 +103,7 @@ function animatedViewport(t, reduced = false) {
   }, (state) => states.push(state));
   const frame = time => { now = time; const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); };
   const wheel = (deltaY, x = 123, y = 90) => listeners.get("wheel")({ preventDefault() {}, clientX: x + 10, clientY: y + 20, deltaY, deltaMode: 0 });
-  const touch = (type, pointerId, x, y) => listeners.get(type)({ pointerType: "touch", button: 0, pointerId, clientX: x + 10, clientY: y + 20 });
+  const touch = (type, pointerId, x, y) => listeners.get(type)({ type, pointerType: "touch", button: 0, pointerId, clientX: x + 10, clientY: y + 20 });
   return { view, worldPosition, frames, listeners, requests, images, markers, states, blends, motion, frame, wheel, touch, captured, canvas };
 }
 
@@ -229,7 +229,8 @@ test("touch pinch and two-finger pan preserve the midpoint's world position and 
   const anchor = f.worldPosition(f.view.camera, 512, 256, 150, 100);
   f.touch("pointermove", 1, 50, 120); f.touch("pointermove", 2, 250, 120); f.frame(16);
   assert(Math.abs(f.view.camera.zoom - 4) < 1e-9);
-  assert.deepEqual(f.worldPosition(f.view.camera, 512, 256, 150, 120), anchor);
+  const midpoint = f.worldPosition(f.view.camera, 512, 256, 150, 120);
+  assert(Math.abs(midpoint.x - anchor.x) < 1e-8 && Math.abs(midpoint.z - anchor.z) < 1e-8);
   f.touch("pointermove", 1, 80, 150); f.touch("pointermove", 2, 280, 150); f.frame(32);
   assert(Math.abs(f.view.camera.zoom - 4) < 1e-9);
   const moved = f.worldPosition(f.view.camera, 512, 256, 180, 150);
@@ -259,6 +260,35 @@ test("touch zoom clamps limits, handles coincident fingers and ignores extra con
   assert.deepEqual(f.view.camera, before);
   f.touch("lostpointercapture", 1, 100, 100); f.touch("pointermove", 1, 200, 100);
   assert.deepEqual(f.view.camera, before); assert.equal(f.captured.size, 0);
+});
+
+test("double tap zooms around the tapped point, while drags and extra fingers never count as taps", t => {
+  const f = animatedViewport(t); f.frame(0);
+  const anchor = f.worldPosition(f.view.camera, 512, 256, 100, 100);
+  f.touch("pointerdown", 1, 100, 100); f.touch("pointerup", 1, 100, 100);
+  f.touch("pointerdown", 2, 100, 100); f.touch("pointerup", 2, 100, 100);
+  f.frame(200);
+  assert.equal(f.view.camera.zoom, 4);
+  const after = f.worldPosition(f.view.camera, 512, 256, 100, 100);
+  assert(Math.abs(after.x - anchor.x) < 1e-8 && Math.abs(after.z - anchor.z) < 1e-8);
+
+  // A dragged contact and a two-finger pinch do not register as taps.
+  for (const id of [3, 4]) { f.touch("pointerdown", id, 100, 100); f.touch("pointermove", id, 160, 100); f.touch("pointerup", id, 160, 100); }
+  f.touch("pointerdown", 5, 100, 100); f.touch("pointerdown", 6, 200, 100); f.touch("pointerup", 6, 200, 100); f.touch("pointerup", 5, 100, 100);
+  f.frame(400);
+  assert.equal(f.view.camera.zoom, 4);
+});
+
+test("a two-finger twist rotates the flat map once past the deadband and ignores pinch jitter", t => {
+  const f = animatedViewport(t); f.frame(0);
+  f.touch("pointerdown", 1, 200, 128); f.touch("pointerdown", 2, 300, 128);
+  f.touch("pointermove", 2, 300, 131); f.frame(16);
+  assert.equal(f.states.at(-1).bearing, 0, "small jitter stays below the deadband");
+  f.touch("pointermove", 1, 250, 78); f.touch("pointermove", 2, 250, 178); f.frame(32);
+  const bearing = f.states.at(-1).bearing;
+  assert(Math.abs(bearing - Math.PI * 1.5) < 1e-6, "clockwise fingers spin the map clockwise");
+  f.touch("pointerup", 2, 250, 178); f.touch("pointerup", 1, 250, 78);
+  assert.equal(f.captured.size, 0);
 });
 
 test("touch cancels wheel inertia, releases contacts on mode changes or close, and leaves 3D input to OrbitControls", t => {

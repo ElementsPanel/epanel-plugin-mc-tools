@@ -118,7 +118,7 @@ function sceneFixture(t, reduced = false, topDown = false, actualControls = fals
 test("3D held WASD combines camera-relative directions, preserves the view angle and stops without mouse inertia", t => {
   const f = sceneFixture(t, false, false, true); f.ready(); f.frame(0);
   assert.deepEqual(f.view.controls.mouseButtons, { LEFT: three.MOUSE.PAN, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE });
-  assert.deepEqual(f.view.controls.touches, { ONE: three.TOUCH.ROTATE, TWO: three.TOUCH.DOLLY_PAN });
+  assert.deepEqual(f.view.controls.touches, { ONE: three.TOUCH.PAN, TWO: three.TOUCH.DOLLY_ROTATE });
   const start = f.view.controls.target.clone(), offset = f.view.viewCamera.position.clone().sub(start);
   let prevented = 0;
   const key = (code, extras = {}) => f.listeners.get("keydown")({ code, preventDefault() { prevented++; }, ...extras });
@@ -139,6 +139,18 @@ test("3D held WASD combines camera-relative directions, preserves the view angle
   key("KeyW", { ctrlKey: true }); key("KeyA", { isComposing: true }); assert.equal(prevented, 4);
   f.view.setProjection("orthographic"); key("KeyW"); assert.equal(prevented, 4);
   f.view.dispose(); assert.equal(f.listeners.has("keydown"), false); assert.equal(f.listeners.has("keyup"), false);
+});
+
+test("3D touch pans with one finger, pinches/rotates with two, and a double tap zooms in", t => {
+  const f = sceneFixture(t); f.ready(); f.frame(0);
+  assert.deepEqual(f.view.controls.touches, { ONE: three.TOUCH.PAN, TWO: three.TOUCH.DOLLY_ROTATE });
+  const tap = (id, x, y) => {
+    f.listeners.get("pointerdown")({ pointerType: "touch", pointerId: id, clientX: x, clientY: y });
+    f.listeners.get("pointerup")({ type: "pointerup", pointerType: "touch", pointerId: id, clientX: x, clientY: y });
+  };
+  const before = f.view.camera.zoom;
+  tap(1, 100, 100); tap(2, 100, 100);
+  assert(f.view.camera.zoom > before, "double tap zooms the 3D camera");
 });
 
 test("3D movement clears on pause, projection switch and context loss instead of resuming held keys", t => {

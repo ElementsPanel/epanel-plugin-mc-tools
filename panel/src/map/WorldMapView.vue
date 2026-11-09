@@ -335,8 +335,8 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px; }
 .mc-map-coordinates { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; }
 .mc-map-coordinates :deep(.v-input) { min-width: 60px; flex: 1; }
-.mc-map-surface { position: relative; flex: 1; min-height: 280px; background: #19252a; overflow: hidden; }
-.mc-map-surface canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; cursor: grab; touch-action: none; }
+.mc-map-surface { position: relative; flex: 1; min-height: 280px; background: #19252a; overflow: hidden; touch-action: none; overscroll-behavior: contain; }
+.mc-map-surface canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .mc-map-progress { position: absolute; inset: 0 0 auto; z-index: 2; }
 .mc-map-player-overlay { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
 .mc-map-player-marker { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); }
@@ -373,4 +373,9 @@ onBeforeUnmount(() => { abort.abort(); viewport?.dispose(); });
 .mc-map-zoom :deep(.v-btn) { color: inherit; }
 .mc-world-map-fullscreen { position: absolute; inset: 0; min-height: 0; }
 .mc-world-map-fullscreen .mc-map-surface { position: absolute; inset: 0; min-height: 0; }
+/* Fingers need bigger targets than a mouse pointer. */
+@media (pointer: coarse) {
+  .mc-map-zoom :deep(.v-btn) { min-width: 44px; min-height: 44px; }
+  .mc-map-position, .mc-map-time { font-size: 13px; }
+}
 </style>

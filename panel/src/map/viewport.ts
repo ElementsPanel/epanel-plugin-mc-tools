@@ -15,10 +15,18 @@ export const MAP_DETAIL_ZOOM = 4;
 interface Tile { image: HTMLImageElement; warnings: number; appearedAt?: number }
 interface DisplayTile { tile: Tile; startedAt: number; duration: number }
 interface ZoomAnimation { from: number; to: number; x: number; y: number; startedAt: number }
+interface Gesture { pointers: number; x: number; y: number; distance: number; angle: number }
 
 const TILE_FADE_DURATION = 240;
 const DETAIL_FADE_DURATION = 240;
 const ZOOM_DURATION = 200;
+// Touch gestures: a double tap zooms in, and a two-finger twist rotates the
+// flat map once it leaves the deadband, so pinching does not spin it by accident.
+const TAP_SLOP = 12;
+const TAP_HOLD = 350;
+const DOUBLE_TAP_DELAY = 320;
+const TWIST_MIN_SPAN = 24;
+const TWIST_DEADBAND = 0.06;
 const easeOut = (progress: number) => 1 - Math.pow(1 - progress, 3);
 const tileKey = (position: string) => `surface:${position}`;
 
@@ -109,6 +117,9 @@ export class MapViewport {
   private frame = 0;
   private readonly pointers = new Map<number, { x: number; y: number }>();
   private rotating?: number;
+  private twistState?: { bearing: number; angle: number };
+  private tap?: { id: number; x: number; y: number; time: number };
+  private lastTap?: { x: number; y: number; time: number };
   private bearing = 0;
   private active = 0;
   private background = 0;
@@ -274,7 +285,15 @@ export class MapViewport {
     this.stopZoom();
     this.schedule();
     this.canvas.setPointerCapture(event.pointerId);
-    this.pointers.set(event.pointerId, this.pointerPosition(event));
+    const position = this.pointerPosition(event);
+    this.pointers.set(event.pointerId, position);
+    this.twistState = undefined;
+    // Only a lone first touch can start a double tap; extra contacts cancel it.
+    if (event.pointerType !== "touch" || this.pointers.size > 1) {
+      this.tap = undefined; this.lastTap = undefined;
+    } else {
+      this.tap = { id: event.pointerId, x: position.x, y: position.y, time: performance.now() };
+    }
     if (event.button === 2) this.rotating = event.pointerId;
     this.canvas.style.cursor = "grabbing";
   };
@@ -293,31 +312,75 @@ export class MapViewport {
     const before = this.gesture();
     this.pointers.set(event.pointerId, this.pointerPosition(event));
     const after = this.gesture();
+    if (this.tap && this.tap.id === event.pointerId && Math.hypot(after.x - this.tap.x, after.y - this.tap.y) > TAP_SLOP) this.tap = undefined;
+    const pinch = before.pointers === 2 && after.pointers === 2 && before.distance > 0 && after.distance > 0;
+    const anchor = pinch ? worldPosition(this.camera, this.width, this.height, before.x, before.y, this.bearing) : undefined;
+    const previousBearing = this.bearing;
     // Apply distance and midpoint changes together, so the world point under
     // the fingers follows their midpoint even while pinching and panning.
-    if (before.distance > 0 && after.distance > 0) {
-      zoomCamera(this.camera, this.width, this.height, before.x, before.y, this.camera.zoom * after.distance / before.distance, this.bearing);
+    if (pinch) zoomCamera(this.camera, this.width, this.height, before.x, before.y, this.camera.zoom * after.distance / before.distance, this.bearing);
+    this.twist(before, after, event.pointerType);
+    if (anchor && this.bearing !== previousBearing) {
+      // Rotation happens around the screen centre; move the camera so the
+      // world point that was under the fingers stays under their midpoint.
+      const projected = worldToScreen((anchor.x - this.camera.x) * this.camera.zoom, (anchor.z - this.camera.z) * this.camera.zoom, this.bearing);
+      const offset = screenToWorld((after.x - projected.x - this.width / 2) / this.camera.zoom,
+        (after.y - projected.y - this.height / 2) / this.camera.zoom, this.bearing);
+      this.center(this.camera.x - offset.x, this.camera.z - offset.z);
+      return;
     }
     const offset = screenToWorld((after.x - before.x) / this.camera.zoom, (after.y - before.y) / this.camera.zoom, this.bearing);
     this.center(this.camera.x - offset.x, this.camera.z - offset.z);
   };
 
+  /** Fingers turning clockwise spin the map clockwise, like a right-button drag. */
+  private twist(before: Gesture, after: Gesture, pointerType: string) {
+    if (pointerType !== "touch" || before.pointers !== 2 || after.pointers !== 2
+      || before.distance < TWIST_MIN_SPAN || after.distance < TWIST_MIN_SPAN) { this.twistState = undefined; return; }
+    // Measure the whole gesture from its starting angle, so returning the
+    // fingers to their original orientation also returns the bearing exactly.
+    const state = this.twistState ??= { bearing: this.bearing, angle: before.angle };
+    const total = Math.atan2(Math.sin(after.angle - state.angle), Math.cos(after.angle - state.angle));
+    this.setBearing(state.bearing - (Math.abs(total) < TWIST_DEADBAND ? 0 : total));
+  }
+
   private up = (event: PointerEvent) => {
+    const tap = this.tap;
+    if (tap?.id === event.pointerId) this.tap = undefined;
+    this.twistState = undefined;
     if (!this.pointers.delete(event.pointerId)) return;
     if (this.rotating === event.pointerId) this.rotating = undefined;
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
     this.canvas.style.cursor = this.pointers.size ? "grabbing" : "grab";
+    if (tap && !this.pointers.size && event.type === "pointerup" && event.pointerType === "touch") this.tapEnd(tap, event);
   };
+
+  /** A double tap zooms in around the tapped point, like a wheel notch there. */
+  private tapEnd(start: { x: number; y: number; time: number }, event: PointerEvent) {
+    const position = this.pointerPosition(event), now = performance.now();
+    const last = this.lastTap;
+    this.lastTap = undefined;
+    if (Math.hypot(position.x - start.x, position.y - start.y) > TAP_SLOP || now - start.time > TAP_HOLD) return;
+    if (!last || now - last.time > DOUBLE_TAP_DELAY || Math.hypot(position.x - last.x, position.y - last.y) > TAP_SLOP * 3) {
+      this.lastTap = { x: position.x, y: position.y, time: now };
+      return;
+    }
+    this.animateZoom(2, position.x, position.y);
+  }
 
   private gesture() {
     const [a, b = a] = this.pointers.values();
-    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) };
+    return { pointers: this.pointers.size, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2,
+      distance: Math.hypot(a.x - b.x, a.y - b.y), angle: Math.atan2(b.y - a.y, b.x - a.x) };
   }
 
   private clearPointers() {
     const ids = [...this.pointers.keys()];
     this.pointers.clear();
     this.rotating = undefined;
+    this.twistState = undefined;
+    this.tap = undefined;
+    this.lastTap = undefined;
     for (const id of ids) if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
     this.canvas.style.cursor = "grab";
   }

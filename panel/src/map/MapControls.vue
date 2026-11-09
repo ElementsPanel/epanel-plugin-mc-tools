@@ -70,4 +70,8 @@ async function toggle(value: boolean) {
   .mc-map-sidebar-page-enter-active,
   .mc-map-sidebar-page-leave-active { transition: none; }
 }
+/* The 480px drawer must still fit a phone screen. */
+@media (max-width: 520px) {
+  .mc-map-sidebar.v-navigation-drawer { width: 100vw !important; max-width: 100vw; }
+}
 </style>

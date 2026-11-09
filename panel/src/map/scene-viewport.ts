@@ -12,6 +12,9 @@ import { KeyboardNavigation } from "./navigation";
 import { normalizeBearing, rotatedSize, screenToWorld, tileInView } from "./bearing";
 
 const SIZE = MAP_SCENE_SIZE, MAX_FACES = 1_200_000, PREFETCH_MARGIN = SIZE * 2;
+const TAP_SLOP = 12;
+const TAP_HOLD = 350;
+const DOUBLE_TAP_DELAY = 320;
 // Reach the far edge of the cloud layer; depth precision is set by the near plane.
 const VIEW_FAR = CLOUD_RANGE + 256;
 const tileKey = (x: number, z: number) => `surface:${x}:${z}`;
@@ -80,6 +83,8 @@ export class SceneViewport implements MapRenderer {
   private readonly clouds?: SceneClouds;
   private readonly cloudEpoch = Date.now();
   private playerProjection?: Matrix4;
+  private tap?: { id: number; x: number; y: number; time: number };
+  private lastTap?: { x: number; y: number; time: number };
   private readonly reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   project(position: { x: number; y: number; z: number }) {
@@ -115,7 +120,9 @@ export class SceneViewport implements MapRenderer {
     this.viewCamera.position.copy(target).add(new Vector3(46, 46, 46).setLength(80));
     this.controls = new OrbitControls(this.viewCamera, inputCanvas);
     this.controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
-    this.controls.touches = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
+    // Touch: one finger pans like a mouse drag, two fingers pinch to zoom and
+    // twist to orbit/tilt the camera.
+    this.controls.touches = { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_ROTATE };
     this.controls.target.copy(target);
     this.controls.minDistance = 160 / 12; this.controls.maxDistance = 160;
     this.controls.minPolarAngle = 0.08; this.controls.maxPolarAngle = Math.PI / 2 - 0.08;
@@ -130,7 +137,9 @@ export class SceneViewport implements MapRenderer {
       set: (zoom: number) => this.setZoom(zoom)
     });
     this.controls.update();
-    inputCanvas.addEventListener("pointerdown", this.focus);
+    inputCanvas.addEventListener("pointerdown", this.pointerDown);
+    inputCanvas.addEventListener("pointerup", this.pointerUp);
+    inputCanvas.addEventListener("pointercancel", this.pointerCancel);
     this.navigation = new KeyboardNavigation(inputCanvas,
       () => !this.topDown && !this.transition && this.active && !this.lost && this.controls.enabled && !this.abort.signal.aborted, this.schedule);
     canvas.addEventListener("webglcontextlost", this.contextLost);
@@ -262,7 +271,9 @@ export class SceneViewport implements MapRenderer {
     this.transition = undefined;
     clearTimeout(this.animationTimer);
     this.observer.disconnect(); this.controls.removeEventListener("change", this.schedule); this.controls.dispose();
-    this.inputCanvas.removeEventListener("pointerdown", this.focus);
+    this.inputCanvas.removeEventListener("pointerdown", this.pointerDown);
+    this.inputCanvas.removeEventListener("pointerup", this.pointerUp);
+    this.inputCanvas.removeEventListener("pointercancel", this.pointerCancel);
     this.canvas.removeEventListener("webglcontextlost", this.contextLost);
     for (const tile of [...this.cache.values()]) this.remove(tile);
     this.displayed.clear(); this.pending.clear(); this.failed.clear(); this.skipped.clear();
@@ -283,6 +294,27 @@ export class SceneViewport implements MapRenderer {
   }
 
   private focus = () => { if (!this.topDown) this.inputCanvas.focus({ preventScroll: true }); };
+  /** Touch double tap zooms in; OrbitControls keeps the drag and pinch gestures. */
+  private pointerDown = (event: PointerEvent) => {
+    this.focus();
+    if (event.pointerType !== "touch" || this.topDown || this.transition || !this.controls.enabled) { this.tap = undefined; return; }
+    this.tap = { id: event.pointerId, x: event.clientX, y: event.clientY, time: performance.now() };
+  };
+  private pointerUp = (event: PointerEvent) => {
+    const tap = this.tap;
+    if (!tap || tap.id !== event.pointerId) return;
+    this.tap = undefined;
+    if (event.type !== "pointerup" || event.pointerType !== "touch" || this.topDown || this.transition) { this.lastTap = undefined; return; }
+    const now = performance.now(), last = this.lastTap;
+    this.lastTap = undefined;
+    if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > TAP_SLOP || now - tap.time > TAP_HOLD) return;
+    if (!last || now - last.time > DOUBLE_TAP_DELAY || Math.hypot(event.clientX - last.x, event.clientY - last.y) > TAP_SLOP * 3) {
+      this.lastTap = { x: event.clientX, y: event.clientY, time: now };
+      return;
+    }
+    this.setZoom(this.camera.zoom * 2);
+  };
+  private pointerCancel = () => { this.tap = undefined; this.lastTap = undefined; };
   private contextLost = (event: Event) => {
     this.navigation.clear();
     event.preventDefault(); this.lost = true; cancelAnimationFrame(this.frame); this.frame = 0;
